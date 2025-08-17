@@ -1,0 +1,187 @@
+<div id="synopsis_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <div class="flex-container alignitemscenter margin0">
+                <b data-i18n="ext_synopsis_title">Synopsis</b>
+                <span id="synopsis_status" class="synopsis-empty">Empty</span>
+            </div>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div id="synopsisExtensionDrawerContents">
+                <!-- Current Synopsis Section -->
+                <div class="synopsis_section">
+                    <div class="synopsis_section_header">
+                        <span data-i18n="ext_synopsis_current">Current Synopsis</span>
+                        <div class="synopsis_controls">
+                            <label for="synopsis_frozen" title="Disable automatic synopsis generation">
+                                <input id="synopsis_frozen" type="checkbox" />
+                                <span data-i18n="ext_synopsis_pause">Pause</span>
+                            </label>
+                        </div>
+                    </div>
+                    <textarea id="synopsis_current" class="text_pole textarea_compact" rows="4"
+                              placeholder="Synopsis will appear here..."></textarea>
+                    <div class="synopsis_controls">
+                        <div id="synopsis_generate_now" class="menu_button menu_button_icon">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            <span data-i18n="ext_synopsis_generate">Generate Now</span>
+                        </div>
+                        <div id="synopsis_clear" class="menu_button menu_button_icon">
+                            <i class="fa-solid fa-trash"></i>
+                            <span data-i18n="ext_synopsis_clear">Clear</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- User Demand Section -->
+                <div class="synopsis_section">
+                    <div class="synopsis_section_header">
+                        <span data-i18n="ext_synopsis_user_preference">User Preference</span>
+                    </div>
+                    <textarea id="synopsis_user_demand" class="text_pole textarea_compact" rows="2"
+                              placeholder="Enter what you want to happen next... (e.g., 'an exciting adventure', 'romantic development')"></textarea>
+                    <div class="synopsis_preset_controls">
+                        <select id="synopsis_preset_select" class="text_pole">
+                            <option value="">-- Select Preset --</option>
+                        </select>
+                        <div id="synopsis_preset_apply" class="menu_button" title="Apply preset">
+                            <i class="fa-solid fa-check"></i>
+                        </div>
+                        <div id="synopsis_preset_store" class="menu_button" title="Save as preset">
+                            <i class="fa-solid fa-save"></i>
+                        </div>
+                        <div id="synopsis_preset_delete" class="menu_button" title="Delete preset">
+                            <i class="fa-solid fa-trash"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- History Section -->
+                <div class="synopsis_section">
+                    <div class="synopsis_section_header">
+                        <span data-i18n="ext_synopsis_history">Synopsis History</span>
+                    </div>
+                    <div class="synopsis_history_controls">
+                        <select id="synopsis_history_select" class="text_pole">
+                            <option value="current">Current Synopsis</option>
+                        </select>
+                        <textarea id="synopsis_history_content" class="text_pole textarea_compact" rows="3"
+                                  placeholder="Select a synopsis to view/edit..."></textarea>
+                        <div class="synopsis_history_buttons">
+                            <div id="synopsis_history_save" class="menu_button menu_button_icon">
+                                <i class="fa-solid fa-save"></i>
+                                <span data-i18n="ext_synopsis_save">Save Changes</span>
+                            </div>
+                            <div id="synopsis_history_delete" class="menu_button menu_button_icon">
+                                <i class="fa-solid fa-trash"></i>
+                                <span data-i18n="ext_synopsis_delete">Delete</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Section -->
+                <div id="synopsisSettingsBlock">
+                    <h4 data-i18n="ext_synopsis_settings">Synopsis Settings</h4>
+
+                    <label for="synopsis_source" data-i18n="ext_synopsis_source">Generate with:</label>
+                    <select id="synopsis_source" class="text_pole">
+                        <option value="main" data-i18n="ext_synopsis_main_api">Main API</option>
+                        <option value="webllm" data-i18n="ext_synopsis_webllm">WebLLM Extension</option>
+                    </select>
+
+                    <div class="synopsis_trigger_settings">
+                        <h5 data-i18n="ext_synopsis_triggers">Generation Triggers</h5>
+                        <label for="synopsis_check_empty">
+                            <input id="synopsis_check_empty" type="checkbox" />
+                            <span data-i18n="ext_synopsis_check_empty">Auto-generate when empty</span>
+                        </label>
+                        <label for="synopsis_check_words">
+                            <input id="synopsis_check_words" type="checkbox" />
+                            <span data-i18n="ext_synopsis_check_words">Generate after word count</span>
+                        </label>
+                        <div data-synopsis-source="main,webllm">
+                            <label for="synopsis_prompt_words">
+                                <span data-i18n="ext_synopsis_word_threshold">Word threshold:</span>
+                                <span id="synopsis_prompt_words_value"></span>
+                            </label>
+                            <input id="synopsis_prompt_words" type="range"
+                                   value="{{defaultSettings.promptWords}}"
+                                   min="{{defaultSettings.promptMinWords}}"
+                                   max="{{defaultSettings.promptMaxWords}}"
+                                   step="{{defaultSettings.promptWordsStep}}" />
+                        </div>
+                    </div>
+
+                    <div data-synopsis-source="main,webllm">
+                        <label for="synopsis_scriptwriter_prompt" class="title_restorable">
+                            <span data-i18n="ext_synopsis_scriptwriter_prompt">Scriptwriter Prompt</span>
+                            <div id="synopsis_scriptwriter_restore" title="Restore default" class="right_menu_button">
+                                <i class="fa-solid fa-clock-rotate-left"></i>
+                            </div>
+                        </label>
+                        <textarea id="synopsis_scriptwriter_prompt" class="text_pole textarea_compact" rows="4"></textarea>
+
+                        <label for="synopsis_template" class="title_restorable">
+                            <span data-i18n="ext_synopsis_template">Injection Template</span>
+                            <div id="synopsis_template_restore" title="Restore default" class="right_menu_button">
+                                <i class="fa-solid fa-clock-rotate-left"></i>
+                            </div>
+                        </label>
+                        <textarea id="synopsis_template" class="text_pole textarea_compact" rows="3"></textarea>
+
+                        <label for="synopsis_history_count">
+                            <span data-i18n="ext_synopsis_history_count">Include previous synopses:</span>
+                            <span id="synopsis_history_count_value"></span>
+                            <small class="synopsis_disabled_hint" data-i18n="ext_synopsis_0_none">0 = none</small>
+                        </label>
+                        <input id="synopsis_history_count" type="range"
+                               value="{{defaultSettings.historyCount}}"
+                               min="{{defaultSettings.historyCountMin}}"
+                               max="{{defaultSettings.historyCountMax}}"
+                               step="1" />
+
+                        <label for="synopsis_override_response_length">
+                            <span data-i18n="ext_synopsis_response_length">Response length (tokens):</span>
+                            <span id="synopsis_override_response_length_value"></span>
+                            <small class="synopsis_disabled_hint" data-i18n="ext_synopsis_0_default">0 = default</small>
+                        </label>
+                        <input id="synopsis_override_response_length" type="range"
+                               value="{{defaultSettings.overrideResponseLength}}"
+                               min="{{defaultSettings.overrideResponseLengthMin}}"
+                               max="{{defaultSettings.overrideResponseLengthMax}}"
+                               step="{{defaultSettings.overrideResponseLengthStep}}" />
+                    </div>
+
+                    <label for="synopsis_position" data-i18n="ext_synopsis_position">Injection Position</label>
+                    <div class="radio_group">
+                        <label>
+                            <input type="radio" name="synopsis_position" value="-1" />
+                            <span data-i18n="None">None (not injected)</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="synopsis_position" value="2" />
+                            <span data-i18n="Before Main Prompt">Before Main Prompt</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="synopsis_position" value="0" />
+                            <span data-i18n="After Main Prompt">After Main Prompt</span>
+                        </label>
+                        <label class="flex-container alignItemsCenter">
+                            <input type="radio" name="synopsis_position" value="1" />
+                            <span data-i18n="In-chat @ Depth">In-chat @ Depth</span>
+                            <input id="synopsis_depth" class="text_pole widthUnset" type="number" min="0" max="9999" />
+                            <span data-i18n="as">as</span>
+                            <select id="synopsis_role" class="text_pole widthNatural">
+                                <option value="0" data-i18n="System">System</option>
+                                <option value="1" data-i18n="User">User</option>
+                                <option value="2" data-i18n="Assistant">Assistant</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

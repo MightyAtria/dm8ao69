@@ -1,0 +1,138 @@
+#synopsis_settings {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#synopsis_current {
+    field-sizing: content;
+    min-height: 100px;
+    max-height: 30dvh;
+}
+
+#synopsis_history_content {
+    field-sizing: content;
+    min-height: 100px;
+    max-height: 30dvh;
+}
+
+#synopsis_user_demand {
+    field-sizing: content;
+    min-height: 60px;
+    max-height: 20dvh;
+}
+
+#synopsis_scriptwriter_prompt {
+    field-sizing: content;
+    min-height: 120px;
+    max-height: 40dvh;
+}
+
+#synopsis_template {
+    field-sizing: content;
+    min-height: 80px;
+    max-height: 30dvh;
+}
+
+.synopsis_controls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.synopsis_preset_controls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+}
+
+.synopsis_history_controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.synopsis_history_buttons {
+    display: flex;
+    flex-direction: row;
+    gap: 5px;
+}
+
+#synopsis_status {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+#synopsis_status.synopsis-active {
+    background-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+#synopsis_status.synopsis-empty {
+    background-color: var(--SmartThemeEmColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+label[for="synopsis_frozen"],
+label[for="synopsis_check_empty"],
+label[for="synopsis_check_words"] {
+    display: flex;
+    align-items: center;
+    margin: 0 !important;
+}
+
+label[for="synopsis_frozen"] input,
+label[for="synopsis_check_empty"] input,
+label[for="synopsis_check_words"] input {
+    margin-right: 10px;
+}
+
+.synopsis_section {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 10px;
+    margin: 10px 0;
+}
+
+.synopsis_section_header {
+    font-weight: bold;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#synopsisSettingsBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.synopsis_trigger_settings {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px;
+    background-color: var(--SmartThemeBlurTintColor);
+    border-radius: 5px;
+}
+
+.synopsis_disabled_hint {
+    margin-left: 5px;
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+#synopsis_preset_select {
+    flex: 1;
+}
+
+.inline-drawer-content .synopsis_section:first-child {
+    margin-top: 0;
+}

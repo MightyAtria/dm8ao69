@@ -1,0 +1,14 @@
+{
+  "display_name": "Synopsis",
+  "loading_order": 9,
+  "requires": [],
+  "optional": [
+    "synopsis"
+  ],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "MightyAtria",
+  "version": "1.0.0",
+  "description": "Generate and manage story synopsis for guided narrative experiences, Based on Summarize by Cohee#1207",
+  "homePage": "tbd"
+}
