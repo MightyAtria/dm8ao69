@@ -3,11 +3,11 @@
   "loading_order": 10,
   "requires": [],
   "optional": [
-    "synopsis"
+    "summarize"
   ],
   "js": "index.js",
   "css": "style.css",
-  "author": "MightyAtria",
+  "author": "Cohee#1207",
   "version": "1.0.0",
-  "homePage": "https://github.com/MightyAtria/dm8ao69/"
+  "homePage": "https://github.com/SillyTavern/SillyTavern"
 }

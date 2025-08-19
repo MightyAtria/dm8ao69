@@ -1,862 +1,1098 @@
-import { extractAllWords } from '../../utils.js';
-import { toastr } from '../../toastr.js';
-import { getContext, extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
+import { getStringHash, debounce, waitUntilCondition, extractAllWords, isTrueBoolean } from '../../utils.js';
+import { getContext, getApiUrl, extension_settings, doExtrasFetch, modules, renderExtensionTemplateAsync } from '../../extensions.js';
 import {
+    activateSendButtons,
+    deactivateSendButtons,
+    animation_duration,
     eventSource,
     event_types,
     extension_prompt_roles,
     extension_prompt_types,
+    generateQuietPrompt,
+    is_send_press,
     saveSettingsDebounced,
     substituteParamsExtended,
     generateRaw,
     getMaxContextSize,
     setExtensionPrompt,
     streamingProcessor,
+    animation_easing,
 } from '../../../script.js';
-import { getTokenCountAsync } from '../../tokenizers.js';
+import { is_group_generating, selected_group } from '../../group-chats.js';
+import { loadMovingUIState } from '../../power-user.js';
+import { dragElement } from '../../RossAscends-mods.js';
+import { getTextTokens, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
+import { debounce_timeout } from '../../constants.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
 import { MacrosParser } from '../../macros.js';
 import { countWebLlmTokens, generateWebLlmChatPrompt, getWebLlmContextSize, isWebLlmSupported } from '../shared.js';
+import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { removeReasoningFromString } from '../../reasoning.js';
-
 export { MODULE_NAME };
 
-// -------------------- 常量与模块名 --------------------
-const MODULE_NAME = '1_synopsis';
+const MODULE_NAME = '2_synopsis';
+
+let lastMessageHash = null;
+let lastMessageId = null;
+let inApiCall = false;
+
+/**
+ * Count the number of tokens in the provided text.
+ * @param {string} text Text to count tokens for
+ * @param {number} padding Number of additional tokens to add to the count
+ * @returns {Promise<number>} Number of tokens in the text
+ */
+async function countSourceTokens(text, padding = 0) {
+    if (extension_settings.synopsis.source === synopsis_sources.webllm) {
+        const count = await countWebLlmTokens(text);
+        return count + padding;
+    }
+
+    if (extension_settings.synopsis.source === synopsis_sources.extras) {
+        const count = getTextTokens(tokenizers.GPT2, text).length;
+        return count + padding;
+    }
+
+    return await getTokenCountAsync(text, padding);
+}
+
+async function getSourceContextSize() {
+    const overrideLength = extension_settings.synopsis.overrideResponseLength;
+
+    if (extension_settings.synopsis.source === synopsis_sources.webllm) {
+        const maxContext = await getWebLlmContextSize();
+        return overrideLength > 0 ? (maxContext - overrideLength) : Math.round(maxContext * 0.75);
+    }
+
+    if (extension_settings.source === synopsis_sources.extras) {
+        return 1024 - 64;
+    }
+
+    return getMaxContextSize(overrideLength);
+}
+
+const formatSynopsisValue = function (value) {
+    if (!value) {
+        return '';
+    }
+
+    value = value.trim();
+
+    if (extension_settings.synopsis.template) {
+        return substituteParamsExtended(extension_settings.synopsis.template, { synopsis: value });
+    } else {
+        return `Synopsis: ${value}`;
+    }
+};
+
+const saveChatDebounced = debounce(() => getContext().saveChat(), debounce_timeout.relaxed);
 
 const synopsis_sources = {
-    main: 'main',
-    webllm: 'webllm',
+    'extras': 'extras',
+    'main': 'main',
+    'webllm': 'webllm',
 };
 
-const MAX_HISTORY = 20;
-const UI_SELECTORS = {
-    container: '#synopsisExtensionDrawerContents',
-    settingsMount: '#extensions_settings2',
-    source: '#synopsis_source',
-    frozen: '#synopsis_frozen',
-    scriptwriterPrompt: '#synopsis_scriptwriter_prompt',
-    template: '#synopsis_template',
-    depth: '#synopsis_depth',
-    role: '#synopsis_role',
-    position: 'input[name="synopsis_position"]',
-    checkEmpty: '#synopsis_check_empty',
-    checkWords: '#synopsis_check_words',
-    promptWords: '#synopsis_prompt_words',
-    promptWordsValue: '#synopsis_prompt_words_value',
-    historyCount: '#synopsis_history_count',
-    historyCountValue: '#synopsis_history_count_value',
-    overrideResponseLength: '#synopsis_override_response_length',
-    overrideResponseLengthValue: '#synopsis_override_response_length_value',
-    userDemand: '#synopsis_user_demand',
-    current: '#synopsis_current',
-    status: '#synopsis_status',
-    generateNow: '#synopsis_generate_now',
-    clear: '#synopsis_clear',
-    historySelect: '#synopsis_history_select',
-    historyContent: '#synopsis_history_content',
-    historyDelete: '#synopsis_history_delete',
-    historySave: '#synopsis_history_save',
-    presetSelect: '#synopsis_preset_select',
-    presetApply: '#synopsis_preset_apply',
-    presetStore: '#synopsis_preset_store',
-    presetDelete: '#synopsis_preset_delete',
-    scriptwriterRestore: '#synopsis_scriptwriter_restore',
-    templateRestore: '#synopsis_template_restore',
+const prompt_builders = {
+    DEFAULT: 0,
+    RAW_BLOCKING: 1,
+    RAW_NON_BLOCKING: 2,
 };
 
-const defaultScriptwriterPrompt = `Based on the current situation, generate a story synopsis for what happens next.
-User's preference for this synopsis: {{user_demand}}
-{{old_synopsis_reference}}
-The synopsis should outline the key events and story beats that will unfold, without spoiling specific details.
-Focus on creating an engaging narrative that suits the characters and setting.`;
-
-const defaultTemplate = `The following is a story outline invisible to {{user}}. You should guide them through this story without spoilers.
-Synopsis: {{synopsis}}
-If the user shows signs of deviating from the story or the current synopsis has been completed, insert <end of current synopsis> in your response as a marker.`;
-
-// -------------------- 状态 --------------------
-let inApiCall = false;
-let currentSynopsis = '';
-let synopsisHistory = []; // [{ id, content, timestamp, userDemand }]
-let abortController = null;
+const defaultPrompt = 'Ignore previous instructions. Summarize the most important facts and events in the story so far. If a synopsis already exists in your memory, use that as a base and expand with new facts. Limit the synopsis to {{words}} words or less. Your response should include nothing but the synopsis.';
+const defaultTemplate = '[Synopsis: {{synopsis}}]';
 
 const defaultSettings = {
     synopsisFrozen: false,
-    source: synopsis_sources.main,
-    scriptwriterPrompt: defaultScriptwriterPrompt,
+    SkipWIAN: false,
+    source: synopsis_sources.extras,
+    prompt: defaultPrompt,
     template: defaultTemplate,
     position: extension_prompt_types.IN_PROMPT,
     role: extension_prompt_roles.SYSTEM,
+    scan: false,
     depth: 2,
-    checkEmpty: true,
-    checkWords: false,
-    promptWords: 500,
-    promptMinWords: 100,
-    promptMaxWords: 2000,
-    promptWordsStep: 50,
+    promptWords: 200,
+    promptMinWords: 25,
+    promptMaxWords: 1000,
+    promptWordsStep: 25,
+    promptInterval: 10,
+    promptMinInterval: 0,
+    promptMaxInterval: 250,
+    promptIntervalStep: 1,
+    promptForceWords: 0,
+    promptForceWordsStep: 100,
+    promptMinForceWords: 0,
+    promptMaxForceWords: 10000,
     overrideResponseLength: 0,
     overrideResponseLengthMin: 0,
     overrideResponseLengthMax: 4096,
     overrideResponseLengthStep: 16,
-    historyCount: 1,
-    historyCountMin: 0,
-    historyCountMax: 10,
-    presets: {
-        Adventure: 'an exciting adventure with challenges and discoveries',
-        Romance: 'a romantic development between characters',
-        'Daily Life': 'casual daily interactions and slice-of-life moments',
-        Mystery: 'a mysterious event or puzzle to solve',
-        Action: 'intense action sequences and conflicts',
-    },
-    userDemand: '',
-    currentSynopsisId: null,
+    maxMessagesPerRequest: 0,
+    maxMessagesPerRequestMin: 0,
+    maxMessagesPerRequestMax: 250,
+    maxMessagesPerRequestStep: 1,
+    prompt_builder: prompt_builders.DEFAULT,
 };
 
-// -------------------- 工具函数 --------------------
-function ensureSettings() {
-    if (!extension_settings.synopsis) {
-        extension_settings.synopsis = {};
+function loadSettings() {
+    if (Object.keys(extension_settings.synopsis).length === 0) {
+        Object.assign(extension_settings.synopsis, defaultSettings);
     }
+
     for (const key of Object.keys(defaultSettings)) {
         if (extension_settings.synopsis[key] === undefined) {
             extension_settings.synopsis[key] = defaultSettings[key];
         }
     }
-}
 
-function cloneDefaultsToUserPresetsIfNeeded() {
-    // 若用户还没有 presets，克隆默认到用户空间，避免删除默认失败的困惑
-    if (!extension_settings.synopsis.presets) {
-        extension_settings.synopsis.presets = { ...defaultSettings.presets };
-    }
-}
-
-function safeGetContext() {
-    try {
-        const ctx = getContext?.();
-        return ctx || { chat: [], name1: 'User', name2: 'Character' };
-    } catch {
-        return { chat: [], name1: 'User', name2: 'Character' };
-    }
-}
-
-function stableId() {
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function formatSynopsisValue(value) {
-    const val = (value || '').trim();
-    const context = safeGetContext();
-
-    if (!val) return '';
-
-    if (extension_settings.synopsis.template) {
-        return substituteParamsExtended(extension_settings.synopsis.template, {
-            synopsis: val,
-            user: context.name1 || 'User',
-        });
-    }
-    return val;
-}
-
-function setSynopsisContext(value, save) {
-    const formattedValue = formatSynopsisValue(value);
-    // role/position/depth 基础校验
-    const role = Object.values(extension_prompt_roles).includes(extension_settings.synopsis.role)
-        ? extension_settings.synopsis.role
-        : extension_prompt_roles.SYSTEM;
-
-    const position = Object.values(extension_prompt_types).includes(extension_settings.synopsis.position)
-        ? extension_settings.synopsis.position
-        : extension_prompt_types.IN_PROMPT;
-
-    const depth = Number.isFinite(extension_settings.synopsis.depth) ? extension_settings.synopsis.depth : 2;
-
-    setExtensionPrompt(
-        MODULE_NAME,
-        formattedValue,
-        position,
-        depth,
-        false,
-        role
-    );
-
-    if (save) {
-        saveSynopsisData();
-    }
-}
-
-function saveSynopsisData() {
-    extension_settings.synopsis.synopsisHistory = synopsisHistory;
-    extension_settings.synopsis.currentSynopsis = currentSynopsis;
-    saveSettingsDebounced();
-}
-
-function updateSynopsisDisplay() {
-    const $cur = $(UI_SELECTORS.current);
-    const $status = $(UI_SELECTORS.status);
-    if ($cur.length) $cur.val(currentSynopsis);
-    if ($status.length) {
-        if (currentSynopsis) {
-            $status.text('Active').addClass('synopsis-active').removeClass('synopsis-empty');
-        } else {
-            $status.text('Empty').addClass('synopsis-empty').removeClass('synopsis-active');
-        }
-    }
-}
-
-function updateHistoryList() {
-    const $select = $(UI_SELECTORS.historySelect);
-    if (!$select.length) return;
-
-    $select.empty();
-    $select.append('<option value="current">Current Synopsis</option>');
-
-    // 最新在前
-    synopsisHistory.forEach((item, index) => {
-        const date = new Date(item.timestamp).toLocaleString();
-        const label = `Synopsis #${synopsisHistory.length - index} - ${date}`;
-        $select.append(`<option value="${item.id}">${label}</option>`);
-    });
-}
-
-function updatePresetsList() {
-    const $select = $(UI_SELECTORS.presetSelect);
-    if (!$select.length) return;
-    $select.empty();
-
-    // 用户空间 presets
-    const presets = extension_settings.synopsis.presets || {};
-    $select.append('<option value="">-- Select Preset --</option>');
-    for (const [name] of Object.entries(presets)) {
-        $select.append(`<option value="${name}">${name}</option>`);
-    }
-    $select.append('<option value="__custom__">+ Add Custom</option>');
-}
-
-function switchSourceControls(value) {
-    const $container = $(UI_SELECTORS.container);
-    if (!$container.length) return;
-    $(`${UI_SELECTORS.container} [data-synopsis-source]`).each((_, el) => {
-        const srcList = (el.dataset.synopsisSource || '')
-            .split(',')
-            .map(s => s.trim());
-        $(el).toggle(srcList.includes(value));
-    });
-}
-
-async function countSourceTokens(text, padding = 0) {
-    try {
-        if (extension_settings.synopsis.source === synopsis_sources.webllm) {
-            const count = await countWebLlmTokens(text || '');
-            return count + padding;
-        }
-        return await getTokenCountAsync(text || '', padding);
-    } catch {
-        // 降级为字符长度估算
-        return (text || '').length + padding;
-    }
-}
-
-async function getSourceContextSize() {
-    const overrideLength = extension_settings.synopsis.overrideResponseLength;
-    try {
-        if (extension_settings.synopsis.source === synopsis_sources.webllm) {
-            const maxContext = await getWebLlmContextSize();
-            return overrideLength > 0 ? (maxContext - overrideLength) : Math.round(maxContext * 0.75);
-        }
-        return getMaxContextSize(overrideLength);
-    } catch {
-        // 兜底
-        return 2048;
-    }
-}
-
-async function buildScriptwriterPrompt() {
-    const context = safeGetContext();
-    const userDemand = extension_settings.synopsis.userDemand ||
-        `a story development that fits ${context.name2 || 'the character'}'s personality`;
-
-    // 拼装历史引用，使用 token 预算裁剪
-    let oldSynopsisReference = '';
-    const historyToUse = Math.max(0, extension_settings.synopsis.historyCount);
-    if (historyToUse > 0 && synopsisHistory.length > 0) {
-        const budgetTokens = Math.floor((await getSourceContextSize()) * 0.2); // 历史预算 20%
-        let used = 0;
-        const selected = [];
-        for (const h of synopsisHistory.slice(0, historyToUse)) {
-            const t = await countSourceTokens(h.content);
-            if (used + t > budgetTokens) break;
-            used += t;
-            selected.push(h);
-        }
-        if (selected.length) {
-            const historyText = selected
-                .map((h, i) => `Previous Synopsis #${i + 1}: ${h.content}`)
-                .join('\n');
-            oldSynopsisReference = `These are the previous ${selected.length} synopsis(es) for reference:\n${historyText}`;
-        }
-    }
-
-    const prompt = substituteParamsExtended(
-        extension_settings.synopsis.scriptwriterPrompt,
-        {
-            user_demand: userDemand,
-            old_synopsis_reference: oldSynopsisReference,
-            char: context.name2 || 'Character',
-            user: context.name1 || 'User',
-        }
-    );
-
-    return prompt;
-}
-
-function disableUiWhileGenerating(disabled) {
-    const ids = [
-        UI_SELECTORS.generateNow,
-        UI_SELECTORS.clear,
-        UI_SELECTORS.source,
-        UI_SELECTORS.frozen,
-        UI_SELECTORS.scriptwriterPrompt,
-        UI_SELECTORS.template,
-        UI_SELECTORS.depth,
-        UI_SELECTORS.role,
-        UI_SELECTORS.position,
-        UI_SELECTORS.checkEmpty,
-        UI_SELECTORS.checkWords,
-        UI_SELECTORS.promptWords,
-        UI_SELECTORS.historyCount,
-        UI_SELECTORS.overrideResponseLength,
-        UI_SELECTORS.userDemand,
-    ];
-    ids.forEach(sel => {
-        const $el = $(sel);
-        if ($el.length) {
-            if ($el.is('input[type="radio"]')) {
-                $el.prop('disabled', disabled);
-            } else {
-                $el.prop('disabled', disabled);
-            }
-        }
-    });
-}
-
-function archiveSynopsis(synopsis) {
-    if (!synopsis) return;
-    const item = {
-        id: stableId(),
-        content: synopsis,
-        timestamp: Date.now(),
-        userDemand: extension_settings.synopsis.userDemand,
-    };
-    synopsisHistory.unshift(item);
-    if (synopsisHistory.length > MAX_HISTORY) {
-        synopsisHistory = synopsisHistory.slice(0, MAX_HISTORY);
-    }
-    saveSynopsisData();
-    updateHistoryList();
-}
-
-// 在新消息中剥离结束标记
-function stripEndMarkerFromMessageText(text) {
-    const endMarker = '<end of current synopsis>';
-    if (!text || typeof text !== 'string') return { text, ended: false };
-    if (text.includes(endMarker)) {
-        return { text: text.replaceAll(endMarker, ''), ended: true };
-    }
-    return { text, ended: false };
-}
-
-function handleSynopsisEndSideEffects() {
-    // 归档并清空
-    if (currentSynopsis) {
-        archiveSynopsis(currentSynopsis);
-    }
-    currentSynopsis = '';
-    extension_settings.synopsis.userDemand = '';
-    saveSynopsisData();
-    setSynopsisContext('', false);
-    updateSynopsisDisplay();
-    toastr.info('Current synopsis has ended!', 'Synopsis Complete');
-}
-
-function scanAndCleanRecentMessages() {
-    const context = safeGetContext();
-    if (!Array.isArray(context.chat) || !context.chat.length) return;
-
-    let endedFound = false;
-    // 仅检查最近若干条，避免大循环；这里检查最后 3 条
-    const start = Math.max(0, context.chat.length - 3);
-    for (let i = start; i < context.chat.length; i++) {
-        const msg = context.chat[i];
-        if (!msg || !msg.mes) continue;
-        const { text, ended } = stripEndMarkerFromMessageText(msg.mes);
-        if (ended) {
-            endedFound = true;
-            msg.mes = text;
-        }
-    }
-    if (endedFound) {
-        // 若上下文提供保存方法尝试保存
-        const ctx = safeGetContext();
-        if (ctx.saveChat && typeof ctx.saveChat === 'function') {
-            ctx.saveChat().catch(err => {
-                console.error('Failed to save chat after cleaning message:', err);
-            });
-        }
-        handleSynopsisEndSideEffects();
-    }
-}
-
-function wordsSinceLastSynopsisPoint() {
-    const context = safeGetContext();
-    let words = 0;
-    for (let i = context.chat.length - 1; i >= 0; i--) {
-        const msg = context.chat[i];
-        if (msg?.extra?.synopsisPoint) break;
-        if (!msg?.mes) continue;
-        // 词数估计：优先 extractAllWords，失败退化为字符数/5
-        try {
-            words += extractAllWords(msg.mes).length;
-        } catch {
-            words += Math.ceil((msg.mes || '').length / 5);
-        }
-    }
-    return words;
-}
-
-// -------------------- 生成逻辑 --------------------
-async function generateSynopsis(force = false) {
-    if (inApiCall || extension_settings.synopsis.synopsisFrozen) return;
-
-    const context = safeGetContext();
-
-    // 非强制时按条件触发
-    if (!force) {
-        if (extension_settings.synopsis.checkEmpty && currentSynopsis) return;
-
-        if (extension_settings.synopsis.checkWords) {
-            const w = wordsSinceLastSynopsisPoint();
-            if (w < extension_settings.synopsis.promptWords) return;
-        }
-    }
-
-    // WebLLM 可用性检查
-    if (extension_settings.synopsis.source === synopsis_sources.webllm && !isWebLlmSupported()) {
-        toastr.warning('WebLLM is not supported in this environment.', 'Synopsis');
-        return;
-    }
-
-    // 取消上一次请求
-    if (abortController) {
-        try { abortController.abort(); } catch {}
-    }
-    abortController = new AbortController();
-
-    try {
-        inApiCall = true;
-        disableUiWhileGenerating(true);
-
-        const scriptwriterPrompt = await buildScriptwriterPrompt();
-        let synopsis = '';
-
-        if (extension_settings.synopsis.source === synopsis_sources.main) {
-            synopsis = await generateRaw({
-                prompt: scriptwriterPrompt,
-                responseLength: extension_settings.synopsis.overrideResponseLength,
-                signal: abortController.signal,
-            });
-        } else {
-            const messages = [{ role: 'system', content: scriptwriterPrompt }];
-            const params = extension_settings.synopsis.overrideResponseLength > 0
-                ? { max_tokens: extension_settings.synopsis.overrideResponseLength }
-                : {};
-            synopsis = await generateWebLlmChatPrompt(messages, params);
-        }
-
-        // 统一后处理：去除显式推理/不必要标签
-        synopsis = removeReasoningFromString(String(synopsis || '').trim());
-
-        if (synopsis) {
-            currentSynopsis = synopsis;
-            saveSynopsisData();
-            updateSynopsisDisplay();
-            updateHistoryList();
-            setSynopsisContext(synopsis, true);
-
-            // 标记当前位置
-            if (Array.isArray(context.chat) && context.chat.length > 0) {
-                const lastMessage = context.chat[context.chat.length - 1];
-                if (lastMessage) {
-                    if (!lastMessage.extra) lastMessage.extra = {};
-                    lastMessage.extra.synopsisPoint = true;
-                }
-            }
-
-            toastr.success('New synopsis generated!', 'Synopsis');
-        }
-    } catch (error) {
-        if (error?.name === 'AbortError') {
-            console.warn('Synopsis generation aborted.');
-        } else {
-            console.error('Failed to generate synopsis:', error);
-            toastr.error('Failed to generate synopsis', 'Error');
-        }
-    } finally {
-        inApiCall = false;
-        disableUiWhileGenerating(false);
-    }
-}
-
-// -------------------- 设置与加载 --------------------
-function loadSettings() {
-    ensureSettings();
-
-    // 载入保存的 synopsis 与历史
-    if (Array.isArray(extension_settings.synopsis.synopsisHistory)) {
-        synopsisHistory = extension_settings.synopsis.synopsisHistory;
-    } else {
-        synopsisHistory = [];
-    }
-    if (typeof extension_settings.synopsis.currentSynopsis === 'string') {
-        currentSynopsis = extension_settings.synopsis.currentSynopsis;
-    } else {
-        currentSynopsis = '';
-    }
-
-    // 初始化 UI 值
-    $(UI_SELECTORS.source).val(extension_settings.synopsis.source).trigger('change');
-    $(UI_SELECTORS.frozen).prop('checked', extension_settings.synopsis.synopsisFrozen).trigger('input');
-    $(UI_SELECTORS.scriptwriterPrompt).val(extension_settings.synopsis.scriptwriterPrompt).trigger('input');
-    $(UI_SELECTORS.template).val(extension_settings.synopsis.template).trigger('input');
-    $(UI_SELECTORS.depth).val(extension_settings.synopsis.depth).trigger('input');
-    $(UI_SELECTORS.role).val(extension_settings.synopsis.role).trigger('input');
-    $(UI_SELECTORS.checkEmpty).prop('checked', extension_settings.synopsis.checkEmpty).trigger('input');
-    $(UI_SELECTORS.checkWords).prop('checked', extension_settings.synopsis.checkWords).trigger('input');
-    $(UI_SELECTORS.promptWords).val(extension_settings.synopsis.promptWords).trigger('input');
-    $(UI_SELECTORS.historyCount).val(extension_settings.synopsis.historyCount).trigger('input');
-    $(UI_SELECTORS.overrideResponseLength).val(extension_settings.synopsis.overrideResponseLength).trigger('input');
-    $(UI_SELECTORS.userDemand).val(extension_settings.synopsis.userDemand).trigger('input');
-    $(`${UI_SELECTORS.position}[value="${extension_settings.synopsis.position}"]`).prop('checked', true).trigger('input');
-
-    updateSynopsisDisplay();
-    cloneDefaultsToUserPresetsIfNeeded();
-    updatePresetsList();
-    updateHistoryList();
+    $('#synopsis_source').val(extension_settings.synopsis.source).trigger('change');
+    $('#synopsis_frozen').prop('checked', extension_settings.synopsis.synopsisFrozen).trigger('input');
+    $('#synopsis_skipWIAN').prop('checked', extension_settings.synopsis.SkipWIAN).trigger('input');
+    $('#synopsis_prompt').val(extension_settings.synopsis.prompt).trigger('input');
+    $('#synopsis_prompt_words').val(extension_settings.synopsis.promptWords).trigger('input');
+    $('#synopsis_prompt_interval').val(extension_settings.synopsis.promptInterval).trigger('input');
+    $('#synopsis_template').val(extension_settings.synopsis.template).trigger('input');
+    $('#synopsis_depth').val(extension_settings.synopsis.depth).trigger('input');
+    $('#synopsis_role').val(extension_settings.synopsis.role).trigger('input');
+    $(`input[name="synopsis_position"][value="${extension_settings.synopsis.position}"]`).prop('checked', true).trigger('input');
+    $('#synopsis_prompt_words_force').val(extension_settings.synopsis.promptForceWords).trigger('input');
+    $(`input[name="synopsis_prompt_builder"][value="${extension_settings.synopsis.prompt_builder}"]`).prop('checked', true).trigger('input');
+    $('#synopsis_override_response_length').val(extension_settings.synopsis.overrideResponseLength).trigger('input');
+    $('#synopsis_max_messages_per_request').val(extension_settings.synopsis.maxMessagesPerRequest).trigger('input');
+    $('#synopsis_include_wi_scan').prop('checked', extension_settings.synopsis.scan).trigger('input');
     switchSourceControls(extension_settings.synopsis.source);
 }
 
-// -------------------- 事件处理（UI） --------------------
+async function onPromptForceWordsAutoClick() {
+    const context = getContext();
+    const maxPromptLength = await getSourceContextSize();
+    const chat = context.chat;
+    const allMessages = chat.filter(m => !m.is_system && m.mes).map(m => m.mes);
+    const messagesWordCount = allMessages.map(m => extractAllWords(m)).flat().length;
+    const averageMessageWordCount = messagesWordCount / allMessages.length;
+    const tokensPerWord = await countSourceTokens(allMessages.join('\n')) / messagesWordCount;
+    const wordsPerToken = 1 / tokensPerWord;
+    const maxPromptLengthWords = Math.round(maxPromptLength * wordsPerToken);
+    // How many words should pass so that messages will start be dropped out of context;
+    const wordsPerPrompt = Math.floor(maxPromptLength / tokensPerWord);
+    // How many words will be needed to fit the allowance buffer
+    const synopsisPromptWords = extractAllWords(extension_settings.synopsis.prompt).length;
+    const promptAllowanceWords = maxPromptLengthWords - extension_settings.synopsis.promptWords - synopsisPromptWords;
+    const averageMessagesPerPrompt = Math.floor(promptAllowanceWords / averageMessageWordCount);
+    const maxMessagesPerSynopsis = extension_settings.synopsis.maxMessagesPerRequest || 0;
+    const targetMessagesInPrompt = maxMessagesPerSynopsis > 0 ? maxMessagesPerSynopsis : Math.max(0, averageMessagesPerPrompt);
+    const targetSynopsisWords = (targetMessagesInPrompt * averageMessageWordCount) + (promptAllowanceWords / 4);
+
+    console.table({
+        maxPromptLength,
+        maxPromptLengthWords,
+        promptAllowanceWords,
+        averageMessagesPerPrompt,
+        targetMessagesInPrompt,
+        targetSynopsisWords,
+        wordsPerPrompt,
+        wordsPerToken,
+        tokensPerWord,
+        messagesWordCount,
+    });
+
+    const ROUNDING = 100;
+    extension_settings.synopsis.promptForceWords = Math.max(1, Math.floor(targetSynopsisWords / ROUNDING) * ROUNDING);
+    $('#synopsis_prompt_words_force').val(extension_settings.synopsis.promptForceWords).trigger('input');
+}
+
+async function onPromptIntervalAutoClick() {
+    const context = getContext();
+    const maxPromptLength = await getSourceContextSize();
+    const chat = context.chat;
+    const allMessages = chat.filter(m => !m.is_system && m.mes).map(m => m.mes);
+    const messagesWordCount = allMessages.map(m => extractAllWords(m)).flat().length;
+    const messagesTokenCount = await countSourceTokens(allMessages.join('\n'));
+    const tokensPerWord = messagesTokenCount / messagesWordCount;
+    const averageMessageTokenCount = messagesTokenCount / allMessages.length;
+    const targetSynopsisTokens = Math.round(extension_settings.synopsis.promptWords * tokensPerWord);
+    const promptTokens = await countSourceTokens(extension_settings.synopsis.prompt);
+    const promptAllowance = maxPromptLength - promptTokens - targetSynopsisTokens;
+    const maxMessagesPerSynopsis = extension_settings.synopsis.maxMessagesPerRequest || 0;
+    const averageMessagesPerPrompt = Math.floor(promptAllowance / averageMessageTokenCount);
+    const targetMessagesInPrompt = maxMessagesPerSynopsis > 0 ? maxMessagesPerSynopsis : Math.max(0, averageMessagesPerPrompt);
+    const adjustedAverageMessagesPerPrompt = targetMessagesInPrompt + (averageMessagesPerPrompt - targetMessagesInPrompt) / 4;
+
+    console.table({
+        maxPromptLength,
+        promptAllowance,
+        targetSynopsisTokens,
+        promptTokens,
+        messagesWordCount,
+        messagesTokenCount,
+        tokensPerWord,
+        averageMessageTokenCount,
+        averageMessagesPerPrompt,
+        targetMessagesInPrompt,
+        adjustedAverageMessagesPerPrompt,
+        maxMessagesPerSynopsis,
+    });
+
+    const ROUNDING = 5;
+    extension_settings.synopsis.promptInterval = Math.max(1, Math.floor(adjustedAverageMessagesPerPrompt / ROUNDING) * ROUNDING);
+
+    $('#synopsis_prompt_interval').val(extension_settings.synopsis.promptInterval).trigger('input');
+}
+
 function onSynopsisSourceChange(event) {
-    extension_settings.synopsis.source = event.target.value;
-    switchSourceControls(event.target.value);
+    const value = event.target.value;
+    extension_settings.synopsis.source = value;
+    switchSourceControls(value);
     saveSettingsDebounced();
+}
+
+function switchSourceControls(value) {
+    $('#synopsisExtensionDrawerContents [data-synopsis-source], #synopsis_settings [data-synopsis-source]').each((_, element) => {
+        const source = element.dataset.synopsisSource.split(',').map(s => s.trim());
+        $(element).toggle(source.includes(value));
+    });
 }
 
 function onSynopsisFrozenInput() {
-    extension_settings.synopsis.synopsisFrozen = $(this).prop('checked');
+    const value = Boolean($(this).prop('checked'));
+    extension_settings.synopsis.synopsisFrozen = value;
     saveSettingsDebounced();
 }
 
-function onScriptwriterPromptInput() {
-    extension_settings.synopsis.scriptwriterPrompt = $(this).val();
+function onSynopsisSkipWIANInput() {
+    const value = Boolean($(this).prop('checked'));
+    extension_settings.synopsis.SkipWIAN = value;
     saveSettingsDebounced();
 }
 
-function onTemplateInput() {
-    extension_settings.synopsis.template = $(this).val();
-    setSynopsisContext(currentSynopsis, true);
+function onSynopsisPromptWordsInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.promptWords = Number(value);
+    $('#synopsis_prompt_words_value').text(extension_settings.synopsis.promptWords);
     saveSettingsDebounced();
 }
 
-function onDepthInput() {
-    extension_settings.synopsis.depth = Number($(this).val());
-    setSynopsisContext(currentSynopsis, true);
+function onSynopsisPromptIntervalInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.promptInterval = Number(value);
+    $('#synopsis_prompt_interval_value').text(extension_settings.synopsis.promptInterval);
     saveSettingsDebounced();
 }
 
-function onRoleInput() {
-    extension_settings.synopsis.role = Number($(this).val());
-    setSynopsisContext(currentSynopsis, true);
+function onSynopsisPromptRestoreClick() {
+    $('#synopsis_prompt').val(defaultPrompt).trigger('input');
+}
+
+function onSynopsisPromptInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.prompt = value;
     saveSettingsDebounced();
 }
 
-function onPositionChange(e) {
-    extension_settings.synopsis.position = e.target.value;
-    setSynopsisContext(currentSynopsis, true);
+function onSynopsisTemplateInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.template = value;
+    reinsertSynopsis();
     saveSettingsDebounced();
 }
 
-function onCheckEmptyInput() {
-    extension_settings.synopsis.checkEmpty = $(this).prop('checked');
+function onSynopsisDepthInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.depth = Number(value);
+    reinsertSynopsis();
     saveSettingsDebounced();
 }
 
-function onCheckWordsInput() {
-    extension_settings.synopsis.checkWords = $(this).prop('checked');
+function onSynopsisRoleInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.role = Number(value);
+    reinsertSynopsis();
     saveSettingsDebounced();
 }
 
-function onPromptWordsInput() {
-    extension_settings.synopsis.promptWords = Number($(this).val());
-    $(UI_SELECTORS.promptWordsValue).text(extension_settings.synopsis.promptWords);
+function onSynopsisPositionChange(e) {
+    const value = e.target.value;
+    extension_settings.synopsis.position = value;
+    reinsertSynopsis();
     saveSettingsDebounced();
 }
 
-function onHistoryCountInput() {
-    extension_settings.synopsis.historyCount = Number($(this).val());
-    $(UI_SELECTORS.historyCountValue).text(extension_settings.synopsis.historyCount);
+function onSynopsisIncludeWIScanInput() {
+    const value = !!$(this).prop('checked');
+    extension_settings.synopsis.scan = value;
+    reinsertSynopsis();
+    saveSettingsDebounced();
+}
+
+function onSynopsisPromptWordsForceInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.promptForceWords = Number(value);
+    $('#synopsis_prompt_words_force_value').text(extension_settings.synopsis.promptForceWords);
     saveSettingsDebounced();
 }
 
 function onOverrideResponseLengthInput() {
-    extension_settings.synopsis.overrideResponseLength = Number($(this).val());
-    $(UI_SELECTORS.overrideResponseLengthValue).text(extension_settings.synopsis.overrideResponseLength);
-    saveSettingsDebounced();
-}
-
-function onUserDemandInput() {
-    extension_settings.synopsis.userDemand = $(this).val();
-    saveSettingsDebounced();
-}
-
-function onCurrentSynopsisInput() {
-    currentSynopsis = $(this).val();
-    setSynopsisContext(currentSynopsis, true);
-    updateSynopsisDisplay();
-}
-
-function onHistorySelectChange() {
     const value = $(this).val();
-    if (value === 'current') {
-        $(UI_SELECTORS.historyContent).val(currentSynopsis);
+    extension_settings.synopsis.overrideResponseLength = Number(value);
+    $('#synopsis_override_response_length_value').text(extension_settings.synopsis.overrideResponseLength);
+    saveSettingsDebounced();
+}
+
+function onMaxMessagesPerRequestInput() {
+    const value = $(this).val();
+    extension_settings.synopsis.maxMessagesPerRequest = Number(value);
+    $('#synopsis_max_messages_per_request_value').text(extension_settings.synopsis.maxMessagesPerRequest);
+    saveSettingsDebounced();
+}
+
+function getLatestSynopsisFromChat(chat) {
+    if (!Array.isArray(chat) || !chat.length) {
+        return '';
+    }
+
+    const reversedChat = chat.slice().reverse();
+    reversedChat.shift();
+    for (let mes of reversedChat) {
+        if (mes.extra && mes.extra.synopsis) {
+            return mes.extra.synopsis;
+        }
+    }
+
+    return '';
+}
+
+function getIndexOfLatestChatSynopsis(chat) {
+    if (!Array.isArray(chat) || !chat.length) {
+        return -1;
+    }
+
+    const reversedChat = chat.slice().reverse();
+    reversedChat.shift();
+    for (let mes of reversedChat) {
+        if (mes.extra && mes.extra.synopsis) {
+            return chat.indexOf(mes);
+        }
+    }
+
+    return -1;
+}
+
+/**
+ * Check if something is changed during the summarization process.
+ * @param {{ groupId: any; chatId: any; characterId: any; }} context
+ * @returns {boolean} True if the context has changed and the synopsis should be discarded
+ */
+function isContextChanged(context) {
+    const newContext = getContext();
+    if (newContext.groupId !== context.groupId
+        || newContext.chatId !== context.chatId
+        || (!newContext.groupId && (newContext.characterId !== context.characterId))) {
+        console.log('Context changed, synopsis discarded');
+        return true;
+    }
+
+    return false;
+}
+
+function onChatChanged() {
+    const context = getContext();
+    const latestSynopsis = getLatestSynopsisFromChat(context.chat);
+    setSynopsisContext(latestSynopsis, false);
+}
+
+async function onChatEvent() {
+    // Module not enabled
+    if (extension_settings.synopsis.source === synopsis_sources.extras && !modules.includes('summarize')) {
         return;
     }
-    const item = synopsisHistory.find(h => h.id === value);
-    $(UI_SELECTORS.historyContent).val(item ? item.content : '');
-}
 
-function onHistoryDelete() {
-    const value = $(UI_SELECTORS.historySelect).val();
-    if (value && value !== 'current') {
-        const item = synopsisHistory.find(h => h.id === value);
-        if (item && confirm('Delete this synopsis from history?')) {
-            synopsisHistory = synopsisHistory.filter(h => h.id !== value);
-            saveSynopsisData();
-            updateHistoryList();
-            $(UI_SELECTORS.historyContent).val('');
-            toastr.success('Synopsis deleted!');
-        }
-    }
-}
-
-function onHistorySave() {
-    const value = $(UI_SELECTORS.historySelect).val();
-    const content = $(UI_SELECTORS.historyContent).val();
-    if (value === 'current') {
-        currentSynopsis = content;
-        setSynopsisContext(currentSynopsis, true);
-        updateSynopsisDisplay();
-        toastr.success('Current synopsis saved!');
-    } else {
-        const item = synopsisHistory.find(h => h.id === value);
-        if (item) {
-            item.content = content;
-            saveSynopsisData();
-            toastr.success('History synopsis saved!');
-        }
-    }
-}
-
-function onPresetApply() {
-    const selected = $(UI_SELECTORS.presetSelect).val();
-    cloneDefaultsToUserPresetsIfNeeded();
-    if (selected && selected !== '__custom__') {
-        const presets = extension_settings.synopsis.presets || {};
-        if (presets[selected]) {
-            $(UI_SELECTORS.userDemand).val(presets[selected]).trigger('input');
-        }
-    } else if (selected === '__custom__') {
-        const name = prompt('Enter preset name:');
-        if (name) {
-            const content = $(UI_SELECTORS.userDemand).val();
-            cloneDefaultsToUserPresetsIfNeeded();
-            extension_settings.synopsis.presets[name] = content;
-            saveSettingsDebounced();
-            updatePresetsList();
-            $(UI_SELECTORS.presetSelect).val(name);
-            toastr.success(`Preset "${name}" saved!`);
-        }
-    }
-}
-
-function onPresetStore() {
-    const content = $(UI_SELECTORS.userDemand).val();
-    const name = prompt('Save current input as preset with name:', 'Custom Preset');
-    if (name) {
-        cloneDefaultsToUserPresetsIfNeeded();
-        extension_settings.synopsis.presets[name] = content;
-        saveSettingsDebounced();
-        updatePresetsList();
-        toastr.success(`Preset "${name}" saved!`);
-    }
-}
-
-function onPresetDelete() {
-    const selected = $(UI_SELECTORS.presetSelect).val();
-    if (selected && selected !== '__custom__' && selected !== '') {
-        if (confirm(`Delete preset "${selected}"?`)) {
-            cloneDefaultsToUserPresetsIfNeeded();
-            if (extension_settings.synopsis.presets[selected] !== undefined) {
-                delete extension_settings.synopsis.presets[selected];
-                saveSettingsDebounced();
-                updatePresetsList();
-                toastr.success(`Preset "${selected}" deleted!`);
-            } else {
-                toastr.info('This preset is not in user space and cannot be deleted directly.');
-            }
-        }
-    }
-}
-
-// -------------------- 聊天事件 --------------------
-async function onChatEvent() {
-    // WebLLM 环境检查
+    // WebLLM is not supported
     if (extension_settings.synopsis.source === synopsis_sources.webllm && !isWebLlmSupported()) {
         return;
     }
 
-    // 避免在流式未完成时触发
+    // Streaming in-progress
     if (streamingProcessor && !streamingProcessor.isFinished) {
         return;
     }
 
-    // 优先清理消息中的结束标记
-    scanAndCleanRecentMessages();
-
+    // Currently summarizing or frozen state - skip
     if (inApiCall || extension_settings.synopsis.synopsisFrozen) {
         return;
     }
 
-    // 在角色消息渲染后，按配置尝试触发生成（非强制）
-    await generateSynopsis(false);
-}
+    const context = getContext();
+    const chat = context.chat;
 
-async function onUserMessageBefore() {
-    // 发送前若为空且未冻结，强制生成
-    if (extension_settings.synopsis.checkEmpty && !currentSynopsis && !extension_settings.synopsis.synopsisFrozen) {
-        await generateSynopsis(true);
+    // No new messages - do nothing
+    if (chat.length === 0 || (lastMessageId === chat.length && getStringHash(chat[chat.length - 1].mes) === lastMessageHash)) {
+        return;
     }
+
+    // Messages has been deleted - rewrite the context with the latest available synopsis
+    if (chat.length < lastMessageId) {
+        const latestSynopsis = getLatestSynopsisFromChat(chat);
+        setSynopsisContext(latestSynopsis, false);
+    }
+
+    // Message has been edited / regenerated - delete the saved synopsis
+    if (chat.length
+        && chat[chat.length - 1].extra
+        && chat[chat.length - 1].extra.synopsis
+        && lastMessageId === chat.length
+        && getStringHash(chat[chat.length - 1].mes) !== lastMessageHash) {
+        delete chat[chat.length - 1].extra.synopsis;
+    }
+
+    summarizeChat(context)
+        .catch(console.error)
+        .finally(() => {
+            lastMessageId = context.chat?.length ?? null;
+            lastMessageHash = getStringHash((context.chat.length && context.chat[context.chat.length - 1]['mes']) ?? '');
+        });
 }
 
-// -------------------- UI 绑定 --------------------
-function setupListeners() {
-    $(UI_SELECTORS.source).off('change').on('change', onSynopsisSourceChange);
-    $(UI_SELECTORS.frozen).off('input').on('input', onSynopsisFrozenInput);
-    $(UI_SELECTORS.scriptwriterPrompt).off('input').on('input', onScriptwriterPromptInput);
-    $(UI_SELECTORS.template).off('input').on('input', onTemplateInput);
-    $(UI_SELECTORS.depth).off('input').on('input', onDepthInput);
-    $(UI_SELECTORS.role).off('input').on('input', onRoleInput);
-    $(UI_SELECTORS.position).off('change').on('change', onPositionChange);
-    $(UI_SELECTORS.checkEmpty).off('input').on('input', onCheckEmptyInput);
-    $(UI_SELECTORS.checkWords).off('input').on('input', onCheckWordsInput);
-    $(UI_SELECTORS.promptWords).off('input').on('input', onPromptWordsInput);
-    $(UI_SELECTORS.historyCount).off('input').on('input', onHistoryCountInput);
-    $(UI_SELECTORS.overrideResponseLength).off('input').on('input', onOverrideResponseLengthInput);
-    $(UI_SELECTORS.userDemand).off('input').on('input', onUserDemandInput);
-    $(UI_SELECTORS.current).off('input').on('input', onCurrentSynopsisInput);
+/**
+ * Forces a synopsis generation for the current chat.
+ * @param {boolean} quiet If an informational toast should be displayed
+ * @returns {Promise<string>} Summarized text
+ */
+async function forceSummarizeChat(quiet) {
+    if (extension_settings.synopsis.source === synopsis_sources.extras) {
+        toastr.warning('Force summarization is not supported for Extras API');
+        return;
+    }
 
-    $(UI_SELECTORS.generateNow).off('click').on('click', () => generateSynopsis(true));
-    $(UI_SELECTORS.clear).off('click').on('click', () => {
-        currentSynopsis = '';
-        setSynopsisContext('', true);
-        updateSynopsisDisplay();
-    });
+    const context = getContext();
+    const skipWIAN = extension_settings.synopsis.SkipWIAN;
 
-    $(UI_SELECTORS.historySelect).off('change').on('change', onHistorySelectChange);
-    $(UI_SELECTORS.historyDelete).off('click').on('click', onHistoryDelete);
-    $(UI_SELECTORS.historySave).off('click').on('click', onHistorySave);
+    const toast = quiet ? jQuery() : toastr.info('Summarizing chat...', 'Please wait', { timeOut: 0, extendedTimeOut: 0 });
+    const value = extension_settings.synopsis.source === synopsis_sources.main
+        ? await summarizeChatMain(context, true, skipWIAN)
+        : await summarizeChatWebLLM(context, true);
 
-    $(UI_SELECTORS.presetApply).off('click').on('click', onPresetApply);
-    $(UI_SELECTORS.presetStore).off('click').on('click', onPresetStore);
-    $(UI_SELECTORS.presetDelete).off('click').on('click', onPresetDelete);
+    toastr.clear(toast);
 
-    $(UI_SELECTORS.scriptwriterRestore).off('click').on('click', () => {
-        if (confirm('Restore default scriptwriter prompt? This will overwrite current content.')) {
-            $(UI_SELECTORS.scriptwriterPrompt).val(defaultScriptwriterPrompt).trigger('input');
-        }
-    });
-    $(UI_SELECTORS.templateRestore).off('click').on('click', () => {
-        if (confirm('Restore default template? This will overwrite current content.')) {
-            $(UI_SELECTORS.template).val(defaultTemplate).trigger('input');
-        }
-    });
+    if (!value) {
+        toastr.warning('Failed to summarize chat');
+        return '';
+    }
+
+    return value;
 }
 
-// -------------------- Slash 命令 --------------------
-async function synopsisCallback(args, text) {
-    const action = args.action || 'get';
-    switch (action) {
-        case 'get':
-            return currentSynopsis || '';
-        case 'generate':
-            await generateSynopsis(true);
-            return currentSynopsis || '';
-        case 'clear':
-            currentSynopsis = '';
-            setSynopsisContext('', true);
-            updateSynopsisDisplay();
-            return 'Synopsis cleared';
-        case 'set':
-            if (text) {
-                currentSynopsis = text;
-                setSynopsisContext(currentSynopsis, true);
-                updateSynopsisDisplay();
-                return 'Synopsis updated';
+/**
+ * Callback for the makesynopsis command.
+ * @param {object} args Command arguments
+ * @param {string} text Text to summarize
+ */
+async function makesynopsisCallback(args, text) {
+    text = text.trim();
+
+    // Summarize the current chat if no text provided
+    if (!text) {
+        const quiet = isTrueBoolean(args.quiet);
+        return await forceSummarizeChat(quiet);
+    }
+
+    const source = args.source || extension_settings.synopsis.source;
+    const prompt = substituteParamsExtended((args.prompt || extension_settings.synopsis.prompt), { words: extension_settings.synopsis.promptWords });
+
+    try {
+        switch (source) {
+            case synopsis_sources.extras:
+                return await callExtrasSummarizeAPI(text);
+            case synopsis_sources.main:
+                return removeReasoningFromString(await generateRaw({ prompt: text, systemPrompt: prompt, responseLength: extension_settings.synopsis.overrideResponseLength }));
+            case synopsis_sources.webllm: {
+                const messages = [{ role: 'system', content: prompt }, { role: 'user', content: text }].filter(m => m.content);
+                const params = extension_settings.synopsis.overrideResponseLength > 0 ? { max_tokens: extension_settings.synopsis.overrideResponseLength } : {};
+                return await generateWebLlmChatPrompt(messages, params);
             }
-            return 'No text provided';
-        default:
-            return 'Unknown action';
+            default:
+                toastr.warning('Invalid summarization source specified');
+                return '';
+        }
+    } catch (error) {
+        toastr.error(String(error), 'Failed to summarize text');
+        console.log(error);
+        return '';
     }
 }
 
-// -------------------- 初始化 --------------------
+async function summarizeChat(context) {
+    const skipWIAN = extension_settings.synopsis.SkipWIAN;
+    switch (extension_settings.synopsis.source) {
+        case synopsis_sources.extras:
+            await summarizeChatExtras(context);
+            break;
+        case synopsis_sources.main:
+            await summarizeChatMain(context, false, skipWIAN);
+            break;
+        case synopsis_sources.webllm:
+            await summarizeChatWebLLM(context, false);
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * Check if the chat should be summarized based on the current conditions.
+ * Return synopsis prompt if it should be summarized.
+ * @param {any} context ST context
+ * @param {boolean} force Summarize the chat regardless of the conditions
+ * @returns {Promise<string>} Synopsis prompt or empty string
+ */
+async function getSynopsisPromptForNow(context, force) {
+    if (extension_settings.synopsis.promptInterval === 0 && !force) {
+        console.debug('Prompt interval is set to 0, skipping summarization');
+        return '';
+    }
+
+    try {
+        // Wait for group to finish generating
+        if (selected_group) {
+            await waitUntilCondition(() => is_group_generating === false, 1000, 10);
+        }
+        // Wait for the send button to be released
+        await waitUntilCondition(() => is_send_press === false, 30000, 100);
+    } catch {
+        console.debug('Timeout waiting for is_send_press');
+        return '';
+    }
+
+    if (!context.chat.length) {
+        console.debug('No messages in chat to summarize');
+        return '';
+    }
+
+    if (context.chat.length < extension_settings.synopsis.promptInterval && !force) {
+        console.debug(`Not enough messages in chat to summarize (chat: ${context.chat.length}, interval: ${extension_settings.synopsis.promptInterval})`);
+        return '';
+    }
+
+    let messagesSinceLastSynopsis = 0;
+    let wordsSinceLastSynopsis = 0;
+    let conditionSatisfied = false;
+    for (let i = context.chat.length - 1; i >= 0; i--) {
+        if (context.chat[i].extra && context.chat[i].extra.synopsis) {
+            break;
+        }
+        messagesSinceLastSynopsis++;
+        wordsSinceLastSynopsis += extractAllWords(context.chat[i].mes).length;
+    }
+
+    if (messagesSinceLastSynopsis >= extension_settings.synopsis.promptInterval) {
+        conditionSatisfied = true;
+    }
+
+    if (extension_settings.synopsis.promptForceWords && wordsSinceLastSynopsis >= extension_settings.synopsis.promptForceWords) {
+        conditionSatisfied = true;
+    }
+
+    if (!conditionSatisfied && !force) {
+        console.debug(`Synopsis conditions not satisfied (messages: ${messagesSinceLastSynopsis}, interval: ${extension_settings.synopsis.promptInterval}, words: ${wordsSinceLastSynopsis}, force words: ${extension_settings.synopsis.promptForceWords})`);
+        return '';
+    }
+
+    console.log('Summarizing chat, messages since last synopsis: ' + messagesSinceLastSynopsis, 'words since last synopsis: ' + wordsSinceLastSynopsis);
+    const prompt = substituteParamsExtended(extension_settings.synopsis.prompt, { words: extension_settings.synopsis.promptWords });
+
+    if (!prompt) {
+        console.debug('Summarization prompt is empty. Skipping summarization.');
+        return '';
+    }
+
+    return prompt;
+}
+
+async function summarizeChatWebLLM(context, force) {
+    if (!isWebLlmSupported()) {
+        return;
+    }
+
+    const prompt = await getSynopsisPromptForNow(context, force);
+
+    if (!prompt) {
+        return;
+    }
+
+    const { rawPrompt, lastUsedIndex } = await getRawSynopsisPrompt(context, prompt);
+
+    if (lastUsedIndex === null || lastUsedIndex === -1) {
+        if (force) {
+            toastr.info('To try again, remove the latest synopsis.', 'No messages found to summarize');
+        }
+
+        return null;
+    }
+
+    const messages = [
+        { role: 'system', content: prompt },
+        { role: 'user', content: rawPrompt },
+    ];
+
+    const params = {};
+
+    if (extension_settings.synopsis.overrideResponseLength > 0) {
+        params.max_tokens = extension_settings.synopsis.overrideResponseLength;
+    }
+
+    try {
+        inApiCall = true;
+        const synopsis = await generateWebLlmChatPrompt(messages, params);
+
+        if (!synopsis) {
+            console.warn('Empty synopsis received');
+            return;
+        }
+
+        // something changed during summarization request
+        if (isContextChanged(context)) {
+            return;
+        }
+
+        setSynopsisContext(synopsis, true, lastUsedIndex);
+        return synopsis;
+    } finally {
+        inApiCall = false;
+    }
+}
+
+async function summarizeChatMain(context, force, skipWIAN) {
+    const prompt = await getSynopsisPromptForNow(context, force);
+
+    if (!prompt) {
+        return;
+    }
+
+    console.log('sending synopsis prompt');
+    let synopsis = '';
+    let index = null;
+
+    if (prompt_builders.DEFAULT === extension_settings.synopsis.prompt_builder) {
+        try {
+            inApiCall = true;
+            /** @type {import('../../../script.js').GenerateQuietPromptParams} */
+            const params = {
+                quietPrompt: prompt,
+                skipWIAN: skipWIAN,
+                responseLength: extension_settings.synopsis.overrideResponseLength,
+            };
+            synopsis = await generateQuietPrompt(params);
+        } finally {
+            inApiCall = false;
+        }
+    }
+
+    if ([prompt_builders.RAW_BLOCKING, prompt_builders.RAW_NON_BLOCKING].includes(extension_settings.synopsis.prompt_builder)) {
+        const lock = extension_settings.synopsis.prompt_builder === prompt_builders.RAW_BLOCKING;
+        try {
+            inApiCall = true;
+            if (lock) {
+                deactivateSendButtons();
+            }
+
+            const { rawPrompt, lastUsedIndex } = await getRawSynopsisPrompt(context, prompt);
+
+            if (lastUsedIndex === null || lastUsedIndex === -1) {
+                if (force) {
+                    toastr.info('To try again, remove the latest synopsis.', 'No messages found to summarize');
+                }
+
+                return null;
+            }
+
+            /** @type {import('../../../script.js').GenerateRawParams} */
+            const params = {
+                prompt: rawPrompt,
+                systemPrompt: prompt,
+                responseLength: extension_settings.synopsis.overrideResponseLength,
+            };
+            const rawSynopsis = await generateRaw(params);
+            synopsis = removeReasoningFromString(rawSynopsis);
+            index = lastUsedIndex;
+        } finally {
+            inApiCall = false;
+            if (lock) {
+                activateSendButtons();
+            }
+        }
+    }
+
+    if (!synopsis) {
+        console.warn('Empty synopsis received');
+        return;
+    }
+
+    if (isContextChanged(context)) {
+        return;
+    }
+
+    setSynopsisContext(synopsis, true, index);
+    return synopsis;
+}
+
+/**
+ * Get the raw summarization prompt from the chat context.
+ * @param {object} context ST context
+ * @param {string} prompt Summarization system prompt
+ * @returns {Promise<{rawPrompt: string, lastUsedIndex: number}>} Raw summarization prompt
+ */
+async function getRawSynopsisPrompt(context, prompt) {
+    /**
+     * Get the synopsis string from the chat buffer.
+     * @param {boolean} includeSystem Include prompt into the synopsis string
+     * @returns {string} Synopsis string
+     */
+    function getSynopsisString(includeSystem) {
+        const delimiter = '\n\n';
+        const stringBuilder = [];
+        const bufferString = chatBuffer.slice().join(delimiter);
+
+        if (includeSystem) {
+            stringBuilder.push(prompt);
+        }
+
+        if (latestSynopsis) {
+            stringBuilder.push(latestSynopsis);
+        }
+
+        stringBuilder.push(bufferString);
+
+        return stringBuilder.join(delimiter).trim();
+    }
+
+    const chat = context.chat.slice();
+    const latestSynopsis = getLatestSynopsisFromChat(chat);
+    const latestSynopsisIndex = getIndexOfLatestChatSynopsis(chat);
+    chat.pop(); // We always exclude the last message from the buffer
+    const chatBuffer = [];
+    const PADDING = 64;
+    const PROMPT_SIZE = await getSourceContextSize();
+    let latestUsedMessage = null;
+
+    for (let index = latestSynopsisIndex + 1; index < chat.length; index++) {
+        const message = chat[index];
+
+        if (!message) {
+            break;
+        }
+
+        if (message.is_system || !message.mes) {
+            continue;
+        }
+
+        const entry = `${message.name}:\n${message.mes}`;
+        chatBuffer.push(entry);
+
+        const tokens = await countSourceTokens(getSynopsisString(true), PADDING);
+
+        if (tokens > PROMPT_SIZE) {
+            chatBuffer.pop();
+            break;
+        }
+
+        latestUsedMessage = message;
+
+        if (extension_settings.synopsis.maxMessagesPerRequest > 0 && chatBuffer.length >= extension_settings.synopsis.maxMessagesPerRequest) {
+            break;
+        }
+    }
+
+    const lastUsedIndex = context.chat.indexOf(latestUsedMessage);
+    const rawPrompt = getSynopsisString(false);
+    return { rawPrompt, lastUsedIndex };
+}
+
+async function summarizeChatExtras(context) {
+    function getSynopsisString() {
+        return (longSynopsis + '\n\n' + synopsisBuffer.slice().reverse().join('\n\n')).trim();
+    }
+
+    const chat = context.chat;
+    const longSynopsis = getLatestSynopsisFromChat(chat);
+    const reversedChat = chat.slice().reverse();
+    reversedChat.shift();
+    const synopsisBuffer = [];
+    const CONTEXT_SIZE = await getSourceContextSize();
+
+    for (const message of reversedChat) {
+        // we reached the point of latest synopsis
+        if (longSynopsis && message.extra && message.extra.synopsis == longSynopsis) {
+            break;
+        }
+
+        // don't care about system
+        if (message.is_system) {
+            continue;
+        }
+
+        // determine the sender's name
+        const entry = `${message.name}:\n${message.mes}`;
+        synopsisBuffer.push(entry);
+
+        // check if token limit was reached
+        const tokens = await countSourceTokens(getSynopsisString());
+        if (tokens >= CONTEXT_SIZE) {
+            break;
+        }
+    }
+
+    const resultingString = getSynopsisString();
+    const resultingTokens = await countSourceTokens(resultingString);
+
+    if (!resultingString || resultingTokens < CONTEXT_SIZE) {
+        console.debug('Not enough context to summarize');
+        return;
+    }
+
+    // perform the summarization API call
+    try {
+        inApiCall = true;
+        const synopsis = await callExtrasSummarizeAPI(resultingString);
+
+        if (!synopsis) {
+            console.warn('Empty synopsis received');
+            return;
+        }
+
+        if (isContextChanged(context)) {
+            return;
+        }
+
+        setSynopsisContext(synopsis, true);
+    }
+    catch (error) {
+        console.log(error);
+    }
+    finally {
+        inApiCall = false;
+    }
+}
+
+/**
+ * Call the Extras API to summarize the provided text.
+ * @param {string} text Text to summarize
+ * @returns {Promise<string>} Summarized text
+ */
+async function callExtrasSummarizeAPI(text) {
+    if (!modules.includes('summarize')) {
+        throw new Error('Summarize module is not enabled in Extras API');
+    }
+
+    const url = new URL(getApiUrl());
+    url.pathname = '/api/summarize';
+
+    const apiResult = await doExtrasFetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Bypass-Tunnel-Reminder': 'bypass',
+        },
+        body: JSON.stringify({
+            text: text,
+            params: {},
+        }),
+    });
+
+    if (apiResult.ok) {
+        const data = await apiResult.json();
+        const synopsis = data.summary;
+        return synopsis;
+    }
+
+    throw new Error('Extras API call failed');
+}
+
+function onSynopsisRestoreClick() {
+    const context = getContext();
+    const content = $('#synopsis_contents').val();
+    const reversedChat = context.chat.slice().reverse();
+    reversedChat.shift();
+
+    for (let mes of reversedChat) {
+        if (mes.extra && mes.extra.synopsis == content) {
+            delete mes.extra.synopsis;
+            break;
+        }
+    }
+
+    const newContent = getLatestSynopsisFromChat(context.chat);
+    setSynopsisContext(newContent, false);
+}
+
+function onSynopsisContentInput() {
+    const value = $(this).val();
+    setSynopsisContext(value, true);
+}
+
+function onSynopsisPromptBuilderInput(e) {
+    const value = Number(e.target.value);
+    extension_settings.synopsis.prompt_builder = value;
+    saveSettingsDebounced();
+}
+
+function reinsertSynopsis() {
+    const existingValue = String($('#synopsis_contents').val());
+    setSynopsisContext(existingValue, false);
+}
+
+/**
+ * Set the synopsis value to the context and save it to the chat message extra.
+ * @param {string} value Value of a synopsis
+ * @param {boolean} saveToMessage Should the synopsis be saved to the chat message extra
+ * @param {number|null} index Index of the chat message to save the synopsis to. If null, the pre-last message is used.
+ */
+function setSynopsisContext(value, saveToMessage, index = null) {
+    setExtensionPrompt(MODULE_NAME, formatSynopsisValue(value), extension_settings.synopsis.position, extension_settings.synopsis.depth, extension_settings.synopsis.scan, extension_settings.synopsis.role);
+    $('#synopsis_contents').val(value);
+
+    const synopsisLog = value
+        ? `Synopsis set to: ${value}. Position: ${extension_settings.synopsis.position}. Depth: ${extension_settings.synopsis.depth}. Role: ${extension_settings.synopsis.role}`
+        : 'Synopsis has no content';
+    console.debug(synopsisLog);
+
+    const context = getContext();
+    if (saveToMessage && context.chat.length) {
+        const idx = index ?? context.chat.length - 2;
+        const mes = context.chat[idx < 0 ? 0 : idx];
+
+        if (!mes.extra) {
+            mes.extra = {};
+        }
+
+        mes.extra.synopsis = value;
+        saveChatDebounced();
+    }
+}
+
+function doPopout(e) {
+    const target = e.target;
+    //repurposes the zoomed avatar template to server as a floating div
+    if ($('#synopsisExtensionPopout').length === 0) {
+        console.debug('did not see popout yet, creating');
+        const originalHTMLClone = $(target).parent().parent().parent().find('.inline-drawer-content').html();
+        const originalElement = $(target).parent().parent().parent().find('.inline-drawer-content');
+        const template = $('#zoomed_avatar_template').html();
+        const controlBarHtml = `<div class="panelControlBar flex-container">
+        <div id="synopsisExtensionPopoutheader" class="fa-solid fa-grip drag-grabber hoverglow"></div>
+        <div id="synopsisExtensionPopoutClose" class="fa-solid fa-circle-xmark hoverglow dragClose"></div>
+    </div>`;
+        const newElement = $(template);
+        newElement.attr('id', 'synopsisExtensionPopout')
+            .css('opacity', 0)
+            .removeClass('zoomed_avatar')
+            .addClass('draggable')
+            .empty();
+        const prevSynopsisBoxContents = $('#synopsis_contents').val().toString(); //copy synopsis box before emptying
+        originalElement.empty();
+        originalElement.html('<div class="flex-container alignitemscenter justifyCenter wide100p"><small>Currently popped out</small></div>');
+        newElement.append(controlBarHtml).append(originalHTMLClone);
+        $('body').append(newElement);
+        newElement.transition({ opacity: 1, duration: animation_duration, easing: animation_easing });
+        $('#synopsisExtensionDrawerContents').addClass('scrollableInnerFull');
+        setSynopsisContext(prevSynopsisBoxContents, false); //paste prev synopsis box contents into popout box
+        setupListeners();
+        loadSettings();
+        loadMovingUIState();
+
+        dragElement(newElement);
+
+        //setup listener for close button to restore extensions menu
+        $('#synopsisExtensionPopoutClose').off('click').on('click', function () {
+            $('#synopsisExtensionDrawerContents').removeClass('scrollableInnerFull');
+            const synopsisPopoutHTML = $('#synopsisExtensionDrawerContents');
+            $('#synopsisExtensionPopout').fadeOut(animation_duration, () => {
+                originalElement.empty();
+                originalElement.append(synopsisPopoutHTML);
+                $('#synopsisExtensionPopout').remove();
+            });
+            loadSettings();
+        });
+    } else {
+        console.debug('saw existing popout, removing');
+        $('#synopsisExtensionPopout').fadeOut(animation_duration, () => { $('#synopsisExtensionPopoutClose').trigger('click'); });
+    }
+}
+
+function setupListeners() {
+    //setup shared listeners for popout and regular ext menu
+    $('#synopsis_restore').off('click').on('click', onSynopsisRestoreClick);
+    $('#synopsis_contents').off('input').on('input', onSynopsisContentInput);
+    $('#synopsis_frozen').off('input').on('input', onSynopsisFrozenInput);
+    $('#synopsis_skipWIAN').off('input').on('input', onSynopsisSkipWIANInput);
+    $('#synopsis_source').off('change').on('change', onSynopsisSourceChange);
+    $('#synopsis_prompt_words').off('input').on('input', onSynopsisPromptWordsInput);
+    $('#synopsis_prompt_interval').off('input').on('input', onSynopsisPromptIntervalInput);
+    $('#synopsis_prompt').off('input').on('input', onSynopsisPromptInput);
+    $('#synopsis_force_summarize').off('click').on('click', () => forceSummarizeChat(false));
+    $('#synopsis_template').off('input').on('input', onSynopsisTemplateInput);
+    $('#synopsis_depth').off('input').on('input', onSynopsisDepthInput);
+    $('#synopsis_role').off('input').on('input', onSynopsisRoleInput);
+    $('input[name="synopsis_position"]').off('change').on('change', onSynopsisPositionChange);
+    $('#synopsis_prompt_words_force').off('input').on('input', onSynopsisPromptWordsForceInput);
+    $('#synopsis_prompt_builder_default').off('input').on('input', onSynopsisPromptBuilderInput);
+    $('#synopsis_prompt_builder_raw_blocking').off('input').on('input', onSynopsisPromptBuilderInput);
+    $('#synopsis_prompt_builder_raw_non_blocking').off('input').on('input', onSynopsisPromptBuilderInput);
+    $('#synopsis_prompt_restore').off('click').on('click', onSynopsisPromptRestoreClick);
+    $('#synopsis_prompt_interval_auto').off('click').on('click', onPromptIntervalAutoClick);
+    $('#synopsis_prompt_words_auto').off('click').on('click', onPromptForceWordsAutoClick);
+    $('#synopsis_override_response_length').off('input').on('input', onOverrideResponseLengthInput);
+    $('#synopsis_max_messages_per_request').off('input').on('input', onMaxMessagesPerRequestInput);
+    $('#synopsis_include_wi_scan').off('input').on('input', onSynopsisIncludeWIScanInput);
+    $('#synopsisSettingsBlockToggle').off('click').on('click', function () {
+        $('#synopsisSettingsBlock').slideToggle(200, 'swing');
+    });
+}
+
 jQuery(async function () {
     async function addExtensionControls() {
         const settingsHtml = await renderExtensionTemplateAsync('synopsis', 'settings', { defaultSettings });
-        const $mount = $(UI_SELECTORS.settingsMount);
-        if ($mount.length) {
-            $mount.append(settingsHtml);
-            setupListeners();
-        } else {
-            console.warn('Settings mount point not found:', UI_SELECTORS.settingsMount);
-        }
+        $('#synopsis_container').append(settingsHtml);
+        setupListeners();
+        $('#synopsisExtensionPopoutButton').off('click').on('click', function (e) {
+            doPopout(e);
+            e.stopPropagation();
+        });
     }
 
     await addExtensionControls();
     loadSettings();
-
-    // 注册事件监听
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onChatEvent);
-    eventSource.on(event_types.USER_MESSAGE_BEFORE_SEND, onUserMessageBefore);
-
-    // 注册 slash 命令
+    eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, onChatEvent);
+    for (const event of [event_types.MESSAGE_DELETED, event_types.MESSAGE_UPDATED, event_types.MESSAGE_SWIPED]) {
+        eventSource.on(event, onChatEvent);
+    }
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'synopsis',
-        callback: synopsisCallback,
+        name: 'makesynopsis',
+        callback: makesynopsisCallback,
         namedArgumentList: [
-            new SlashCommandNamedArgument('action', 'Action to perform (get, generate, clear, set)', [ARGUMENT_TYPE.STRING], false, false, 'get', ['get', 'generate', 'clear', 'set']),
+            new SlashCommandNamedArgument('source', 'API to use for summarization', [ARGUMENT_TYPE.STRING], false, false, '', Object.values(synopsis_sources)),
+            SlashCommandNamedArgument.fromProps({
+                name: 'prompt',
+                description: 'prompt to use for summarization',
+                typeList: [ARGUMENT_TYPE.STRING],
+                defaultValue: '',
+            }),
+            SlashCommandNamedArgument.fromProps({
+                name: 'quiet',
+                description: 'suppress the toast message when summarizing the chat',
+                typeList: [ARGUMENT_TYPE.BOOLEAN],
+                defaultValue: 'false',
+                enumList: commonEnumProviders.boolean('trueFalse')(),
+            }),
         ],
         unnamedArgumentList: [
-            new SlashCommandArgument('text for set action', [ARGUMENT_TYPE.STRING], false, false, ''),
+            new SlashCommandArgument('text to summarize', [ARGUMENT_TYPE.STRING], false, false, ''),
         ],
-        helpString: 'Manage story synopsis. Actions: get (default), generate, clear, set [text]',
+        helpString: 'Summarizes the given text. If no text is provided, the current chat will be summarized. Can specify the source and the prompt to use.',
         returns: ARGUMENT_TYPE.STRING,
     }));
 
-    // 注册宏
-    MacrosParser.registerMacro('synopsis', () => currentSynopsis || '');
+    MacrosParser.registerMacro('synopsis', () => getLatestSynopsisFromChat(getContext().chat));
 });

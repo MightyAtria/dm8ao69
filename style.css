@@ -1,139 +1,47 @@
 #synopsis_settings {
     display: flex;
     flex-direction: column;
-    gap: 10px;
 }
 
-/* 可根据内容自动扩高，但不设定颜色 */
-#synopsis_current {
+#synopsis_contents {
     field-sizing: content;
-    min-height: 100px;
-    max-height: 30dvh;
+    max-height: 50dvh;
 }
 
-#synopsis_history_content {
-    field-sizing: content;
-    min-height: 100px;
-    max-height: 30dvh;
+#synopsis_restore {
+    width: max-content;
 }
 
-#synopsis_user_demand {
-    field-sizing: content;
-    min-height: 60px;
-    max-height: 20dvh;
-}
-
-#synopsis_scriptwriter_prompt {
-    field-sizing: content;
-    min-height: 120px;
-    max-height: 40dvh;
-}
-
-#synopsis_template {
-    field-sizing: content;
-    min-height: 80px;
-    max-height: 30dvh;
-}
-
-/* 仅布局，不设颜色 */
-.synopsis_controls {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.synopsis_preset_controls {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 5px;
-}
-
-.synopsis_history_controls {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.synopsis_history_buttons {
-    display: flex;
-    flex-direction: row;
-    gap: 5px;
-}
-
-/* 状态徽标不设定颜色，由站点统一样式接管 */
-#synopsis_status {
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.9em;
-    font-weight: bold;
-}
-
-/* 不再设置 active/empty 的颜色，只保留状态类以供站点样式选择性覆盖 */
-#synopsis_status.synopsis-active {}
-#synopsis_status.synopsis-empty {}
-
-/* 标签与复选框的排版 */
 label[for="synopsis_frozen"],
-label[for="synopsis_check_empty"],
-label[for="synopsis_check_words"] {
+label[for="synopsis_skipWIAN"] {
     display: flex;
     align-items: center;
     margin: 0 !important;
 }
 
-label[for="synopsis_frozen"] input,
-label[for="synopsis_check_empty"] input,
-label[for="synopsis_check_words"] input {
+label[for="synopsis_frozen"] input {
     margin-right: 10px;
 }
 
-/* 外框仅保留边框样式结构，不设具体颜色 */
-.synopsis_section {
-    border: 1px solid currentColor; /* 使用 currentColor，使其继承父级文本色；也可改为 border: 1px solid transparent; */
-    border-radius: 8px;
-    padding: 10px;
-    margin: 10px 0;
-}
-
-.synopsis_section_header {
-    font-weight: bold;
-    margin-bottom: 10px;
+.synopsis_contents_controls {
     display: flex;
+    flex-direction: row;
     align-items: center;
     justify-content: space-between;
 }
 
-/* 设置区块的排列与间距 */
+.synopsis_disabled_hint {
+    margin-left: 2px;
+}
+
 #synopsisSettingsBlock {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    row-gap: 5px;
 }
 
-/* 触发设置容器，不设背景色 */
-.synopsis_trigger_settings {
+#synopsisExtensionPopout {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 10px;
-    border-radius: 5px;
-}
-
-/* 小字提示的样式保留但不设色 */
-.synopsis_disabled_hint {
-    margin-left: 5px;
-    opacity: 0.7;
-    font-size: 0.9em;
-}
-
-#synopsis_preset_select {
-    flex: 1;
-}
-
-.inline-drawer-content .synopsis_section:first-child {
-    margin-top: 0;
+    padding-top: 25px;
 }

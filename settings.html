@@ -1,214 +1,140 @@
 <div id="synopsis_settings">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <div class="flex-container alignItemsCenter margin0">
-                <b data-i18n="ext_synopsis_title">Synopsis</b>
-                <span id="synopsis_status" class="synopsis-empty" aria-live="polite">Empty</span>
+            <div class="flex-container alignitemscenter margin0">
+                <b data-i18n="ext_syn_title">Synopsis</b>
+                <i id="synopsisExtensionPopoutButton" class="fa-solid fa-window-restore menu_button margin0"></i>
             </div>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down" aria-hidden="true"></div>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
-
         <div class="inline-drawer-content">
             <div id="synopsisExtensionDrawerContents">
-                <!-- Current Synopsis Section -->
-                <div class="synopsis_section">
-                    <div class="synopsis_section_header">
-                        <span data-i18n="ext_synopsis_current">Current Synopsis</span>
-                        <div class="synopsis_controls">
-                            <label for="synopsis_frozen" title="Disable automatic synopsis generation">
-                                <input id="synopsis_frozen" type="checkbox" />
-                                <span data-i18n="ext_synopsis_pause">Pause</span>
-                            </label>
-                        </div>
-                    </div>
+                <label for="synopsis_source" data-i18n="ext_syn_with">Synopsis with:</label>
+                <select id="synopsis_source" class="text_pole">
+                    <option value="main" data-i18n="ext_syn_main_api">Main API</option>
+                    <option value="extras">Extras API (deprecated)</option>
+                    <option value="webllm" data-i18n="ext_syn_webllm">WebLLM Extension</option>
+                </select><br>
 
-                    <textarea
-                            id="synopsis_current"
-                            class="text_pole textarea_compact"
-                            rows="4"
-                            placeholder="Synopsis will appear here..."
-                            aria-label="Current synopsis"></textarea>
-
-                    <div class="synopsis_controls">
-                        <div id="synopsis_generate_now" class="menu_button menu_button_icon" role="button" tabindex="0" title="Generate a new synopsis now">
-                            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
-                            <span data-i18n="ext_synopsis_generate">Generate Now</span>
-                        </div>
-                        <div id="synopsis_clear" class="menu_button menu_button_icon" role="button" tabindex="0" title="Clear current synopsis">
-                            <i class="fa-solid fa-trash" aria-hidden="true"></i>
-                            <span data-i18n="ext_synopsis_clear">Clear</span>
-                        </div>
+                <div class="flex-container justifyspacebetween alignitemscenter">
+                    <span data-i18n="ext_syn_current_synopsis">Current synopsis:</span>
+                    <i class="editor_maximize fa-solid fa-maximize right_menu_button" data-for="synopsis_contents" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
+                    <span class="flex1">&nbsp;</span>
+                    <div id="synopsis_restore" class="menu_button margin0" data-i18n="[title]ext_syn_restore_tip" title="Restore a previous synopsis; use repeatedly to clear summarization state for this chat.">
+                        <small data-i18n="ext_syn_restore_previous">Restore Previous</small>
                     </div>
                 </div>
 
-                <!-- User Demand Section -->
-                <div class="synopsis_section">
-                    <div class="synopsis_section_header">
-                        <span data-i18n="ext_synopsis_user_preference">User Preference</span>
+                <textarea id="synopsis_contents" class="text_pole textarea_compact" rows="6" data-i18n="[placeholder]ext_syn_synopsis_placeholder" placeholder="Synopsis will be generated here..."></textarea>
+                <div class="synopsis_contents_controls">
+                    <div id="synopsis_force_summarize" data-synopsis-source="main,webllm" class="menu_button menu_button_icon" title="Trigger a synopsis update right now." data-i18n="[title]ext_syn_force_tip">
+                        <i class="fa-solid fa-database"></i>
+                        <span data-i18n="ext_syn_force_text">Synopsis now</span>
                     </div>
-
-                    <textarea
-                            id="synopsis_user_demand"
-                            class="text_pole textarea_compact"
-                            rows="2"
-                            placeholder="Enter what you want to happen next... (e.g., 'an exciting adventure', 'romantic development')"
-                            aria-label="User preference for next synopsis"></textarea>
-
-                    <div class="synopsis_preset_controls">
-                        <select id="synopsis_preset_select" class="text_pole" aria-label="Select a preset">
-                            <option value="">-- Select Preset --</option>
-                        </select>
-                        <div id="synopsis_preset_apply" class="menu_button" role="button" tabindex="0" title="Apply preset">
-                            <i class="fa-solid fa-check" aria-hidden="true"></i>
-                        </div>
-                        <div id="synopsis_preset_store" class="menu_button" role="button" tabindex="0" title="Save current input as preset">
-                            <i class="fa-solid fa-save" aria-hidden="true"></i>
-                        </div>
-                        <div id="synopsis_preset_delete" class="menu_button" role="button" tabindex="0" title="Delete selected preset">
-                            <i class="fa-solid fa-trash" aria-hidden="true"></i>
-                        </div>
+                    <label for="synopsis_frozen" title="Disable automatic synopsis updates. While paused, the synopsis remains as-is. You can still force an update by pressing the Synopsis now button (which is only available with the Main API)." data-i18n="[title]Disable automatic synopsis updates. While paused, the synopsis remains as-is. You can still force an update by pressing the Synopsis now button (which is only available with the Main API)."><input id="synopsis_frozen" type="checkbox" /><span data-i18n="ext_syn_pause">Pause</span></label>
+                    <label data-synopsis-source="main" for="synopsis_skipWIAN" title="Omit World Info and Author's Note from text to be summarized. Only has an effect when using the Main API. The Extras API always omits WI/AN." data-i18n="[title]Omit World Info and Author's Note from text to be summarized. Only has an effect when using the Main API. The Extras API always omits WI/AN.">
+                        <input id="synopsis_skipWIAN" type="checkbox" />
+                        <span data-i18n="ext_syn_no_wi_an">No WI/AN</span>
+                    </label>
+                </div>
+                <div class="synopsis_contents_controls">
+                    <div id="synopsisSettingsBlockToggle" class="menu_button menu_button_icon" data-i18n="[title]ext_syn_settings_tip" title="Edit summarization prompt, insertion position, etc.">
+                        <i class="fa-solid fa-cog"></i>
+                        <span data-i18n="ext_syn_settings">Synopsis Settings</span>
                     </div>
                 </div>
-
-                <!-- History Section -->
-                <div class="synopsis_section">
-                    <div class="synopsis_section_header">
-                        <span data-i18n="ext_synopsis_history">Synopsis History</span>
-                    </div>
-
-                    <div class="synopsis_history_controls">
-                        <select id="synopsis_history_select" class="text_pole" aria-label="Select a synopsis from history">
-                            <option value="current">Current Synopsis</option>
-                        </select>
-
-                        <textarea
-                                id="synopsis_history_content"
-                                class="text_pole textarea_compact"
-                                rows="3"
-                                placeholder="Select a synopsis to view/edit..."
-                                aria-label="Selected history synopsis content"></textarea>
-
-                        <div class="synopsis_history_buttons">
-                            <div id="synopsis_history_save" class="menu_button menu_button_icon" role="button" tabindex="0" title="Save changes">
-                                <i class="fa-solid fa-save" aria-hidden="true"></i>
-                                <span data-i18n="ext_synopsis_save">Save Changes</span>
-                            </div>
-                            <div id="synopsis_history_delete" class="menu_button menu_button_icon" role="button" tabindex="0" title="Delete selected history item">
-                                <i class="fa-solid fa-trash" aria-hidden="true"></i>
-                                <span data-i18n="ext_synopsis_delete">Delete</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Settings Section -->
-                <div id="synopsisSettingsBlock">
-                    <h4 data-i18n="ext_synopsis_settings">Synopsis Settings</h4>
-
-                    <label for="synopsis_source" data-i18n="ext_synopsis_source">Generate with:</label>
-                    <select id="synopsis_source" class="text_pole" aria-label="Select generation source">
-                        <option value="main" data-i18n="ext_synopsis_main_api">Main API</option>
-                        <option value="webllm" data-i18n="ext_synopsis_webllm">WebLLM Extension</option>
-                    </select>
-
-                    <div class="synopsis_trigger_settings">
-                        <h5 data-i18n="ext_synopsis_triggers">Generation Triggers</h5>
-
-                        <label for="synopsis_check_empty" title="Automatically generate when synopsis is empty">
-                            <input id="synopsis_check_empty" type="checkbox" />
-                            <span data-i18n="ext_synopsis_check_empty">Auto-generate when empty</span>
+                <div id="synopsisSettingsBlock" style="display:none;">
+                    <div data-synopsis-source="main">
+                        <label data-i18n="ext_syn_prompt_builder">
+                            Prompt builder
                         </label>
-
-                        <label for="synopsis_check_words" title="Generate a new synopsis after enough conversation">
-                            <input id="synopsis_check_words" type="checkbox" />
-                            <span data-i18n="ext_synopsis_check_words">Generate after word count</span>
+                        <label class="checkbox_label" for="synopsis_prompt_builder_raw_blocking" data-i18n="[title]ext_syn_prompt_builder_1_desc" title="Extension will build its own prompt using messages that were not summarized yet. Blocks the chat until the synopsis is generated.">
+                            <input id="synopsis_prompt_builder_raw_blocking" type="radio" name="synopsis_prompt_builder" value="1" />
+                            <span data-i18n="ext_syn_prompt_builder_1">Raw, blocking</span>
                         </label>
-
-                        <div data-synopsis-source="main,webllm">
-                            <label for="synopsis_prompt_words">
-                                <span data-i18n="ext_synopsis_word_threshold">Word threshold:</span>
-                                <span id="synopsis_prompt_words_value">0</span>
-                            </label>
-                            <input
-                                    id="synopsis_prompt_words"
-                                    type="range"
-                                    value="{{defaultSettings.promptWords}}"
-                                    min="{{defaultSettings.promptMinWords}}"
-                                    max="{{defaultSettings.promptMaxWords}}"
-                                    step="{{defaultSettings.promptWordsStep}}"
-                                    aria-label="Word threshold slider" />
-                        </div>
+                        <label class="checkbox_label" for="synopsis_prompt_builder_raw_non_blocking" data-i18n="[title]ext_syn_prompt_builder_2_desc" title="Extension will build its own prompt using messages that were not summarized yet. Does not block the chat while the synopsis is being generated. Not all backends support this mode.">
+                            <input id="synopsis_prompt_builder_raw_non_blocking" type="radio" name="synopsis_prompt_builder" value="2" />
+                            <span data-i18n="ext_syn_prompt_builder_2">Raw, non-blocking</span>
+                        </label>
+                        <label class="checkbox_label" id="synopsis_prompt_builder_default" data-i18n="[title]ext_syn_prompt_builder_3_desc" title="Extension will use the regular main prompt builder and add the synopsis request to it as the last system message.">
+                            <input id="synopsis_prompt_builder_default" type="radio" name="synopsis_prompt_builder" value="0" />
+                            <span data-i18n="ext_syn_prompt_builder_3">Classic, blocking</span>
+                        </label>
                     </div>
-
                     <div data-synopsis-source="main,webllm">
-                        <label for="synopsis_scriptwriter_prompt" class="title_restorable">
-                            <span data-i18n="ext_synopsis_scriptwriter_prompt">Scriptwriter Prompt</span>
-                            <div id="synopsis_scriptwriter_restore" title="Restore default" class="right_menu_button" role="button" tabindex="0" aria-label="Restore default scriptwriter prompt">
-                                <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+                        <label for="synopsis_prompt" class="title_restorable">
+                            <span data-i18n="Synopsis Prompt">Synopsis Prompt</span>
+                            <div id="synopsis_prompt_restore" data-i18n="[title]ext_syn_restore_default_prompt_tip" title="Restore default prompt" class="right_menu_button">
+                                <div class="fa-solid fa-clock-rotate-left"></div>
                             </div>
                         </label>
-                        <textarea id="synopsis_scriptwriter_prompt" class="text_pole textarea_compact" rows="4" aria-label="Scriptwriter prompt"></textarea>
-
-                        <label for="synopsis_template" class="title_restorable">
-                            <span data-i18n="ext_synopsis_template">Injection Template</span>
-                            <div id="synopsis_template_restore" title="Restore default" class="right_menu_button" role="button" tabindex="0" aria-label="Restore default template">
-                                <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
-                            </div>
-                        </label>
-                        <textarea id="synopsis_template" class="text_pole textarea_compact" rows="3" aria-label="Injection template"></textarea>
-
-                        <label for="synopsis_history_count">
-                            <span data-i18n="ext_synopsis_history_count">Include previous synopses:</span>
-                            <span id="synopsis_history_count_value">0</span>
-                            <small class="synopsis_disabled_hint" data-i18n="ext_synopsis_0_none">0 = none</small>
-                        </label>
-                        <input
-                                id="synopsis_history_count"
-                                type="range"
-                                value="{{defaultSettings.historyCount}}"
-                                min="{{defaultSettings.historyCountMin}}"
-                                max="{{defaultSettings.historyCountMax}}"
-                                step="1"
-                                aria-label="Number of previous synopses to include" />
-
+                        <textarea id="synopsis_prompt" class="text_pole textarea_compact" rows="6" data-i18n="[placeholder]ext_syn_prompt_placeholder" placeholder="This prompt will be sent to AI to request the synopsis generation. &lcub;&lcub;words&rcub;&rcub; will resolve to the 'Number of words' parameter."></textarea>
+                        <label for="synopsis_prompt_words"><span data-i18n="ext_syn_target_length_1">Target synopsis length</span> <span data-i18n="ext_syn_target_length_2">(</span><span id="synopsis_prompt_words_value"></span><span data-i18n="ext_syn_target_length_3"> words)</span></label>
+                        <input id="synopsis_prompt_words" type="range" value="{{defaultSettings.promptWords}}" min="{{defaultSettings.promptMinWords}}" max="{{defaultSettings.promptMaxWords}}" step="{{defaultSettings.promptWordsStep}}" />
                         <label for="synopsis_override_response_length">
-                            <span data-i18n="ext_synopsis_response_length">Response length (tokens):</span>
-                            <span id="synopsis_override_response_length_value">0</span>
-                            <small class="synopsis_disabled_hint" data-i18n="ext_synopsis_0_default">0 = default</small>
+                            <span data-i18n="ext_syn_api_response_length_1">API response length</span> <span data-i18n="ext_syn_api_response_length_2">(</span><span id="synopsis_override_response_length_value"></span><span data-i18n="ext_syn_api_response_length_3"> tokens)</span>
+                            <small class="synopsis_disabled_hint" data-i18n="ext_syn_0_default">0 = default</small>
                         </label>
-                        <input
-                                id="synopsis_override_response_length"
-                                type="range"
-                                value="{{defaultSettings.overrideResponseLength}}"
-                                min="{{defaultSettings.overrideResponseLengthMin}}"
-                                max="{{defaultSettings.overrideResponseLengthMax}}"
-                                step="{{defaultSettings.overrideResponseLengthStep}}"
-                                aria-label="Override response length in tokens" />
+                        <input id="synopsis_override_response_length" type="range" value="{{defaultSettings.overrideResponseLength}}" min="{{defaultSettings.overrideResponseLengthMin}}" max="{{defaultSettings.overrideResponseLengthMax}}" step="{{defaultSettings.overrideResponseLengthStep}}" />
+                        <label for="synopsis_max_messages_per_request">
+                            <span data-i18n="ext_syn_raw_max_msg">[Raw/WebLLM] Max messages per request</span> (<span id="synopsis_max_messages_per_request_value"></span>)
+                            <small class="synopsis_disabled_hint" data-i18n="ext_syn_0_unlimited">0 = unlimited</small>
+                        </label>
+                        <input id="synopsis_max_messages_per_request" type="range" value="{{defaultSettings.maxMessagesPerRequest}}" min="{{defaultSettings.maxMessagesPerRequestMin}}" max="{{defaultSettings.maxMessagesPerRequestMax}}" step="{{defaultSettings.maxMessagesPerRequestStep}}" />
+                        <h4 data-i18n="Update frequency" class="textAlignCenter">
+                            Update frequency
+                        </h4>
+                        <label for="synopsis_prompt_interval" class="title_restorable">
+                            <span>
+                                <span data-i18n="ext_syn_update_every_messages_1">Update every</span> <span id="synopsis_prompt_interval_value"></span><span data-i18n="ext_syn_update_every_messages_2"> messages</span>
+                                <small class="synopsis_disabled_hint" data-i18n="ext_syn_0_disable">0 = disable</small>
+                            </span>
+                            <div id="synopsis_prompt_interval_auto" data-i18n="[title]ext_syn_auto_adjust_desc" title="Try to automatically adjust the interval based on the chat metrics." class="right_menu_button">
+                                <div class="fa-solid fa-wand-magic-sparkles"></div>
+                            </div>
+                        </label>
+                        <input id="synopsis_prompt_interval" type="range" value="{{defaultSettings.promptInterval}}" min="{{defaultSettings.promptMinInterval}}" max="{{defaultSettings.promptMaxInterval}}" step="{{defaultSettings.promptIntervalStep}}" />
+                        <label for="synopsis_prompt_words_force" class="title_restorable">
+                            <span>
+                                <span data-i18n="ext_syn_update_every_words_1">Update every</span> <span id="synopsis_prompt_words_force_value"></span><span data-i18n="ext_syn_update_every_words_2"> words</span>
+                                <small class="synopsis_disabled_hint" data-i18n="ext_syn_0_disable">0 = disable</small>
+                            </span>
+                            <div id="synopsis_prompt_words_auto" data-i18n="[title]ext_syn_auto_adjust_desc" title="Try to automatically adjust the interval based on the chat metrics." class="right_menu_button">
+                                <div class="fa-solid fa-wand-magic-sparkles"></div>
+                            </div>
+                        </label>
+                        <input id="synopsis_prompt_words_force" type="range" value="{{defaultSettings.promptForceWords}}" min="{{defaultSettings.promptMinForceWords}}" max="{{defaultSettings.promptMaxForceWords}}" step="{{defaultSettings.promptForceWordsStep}}" />
+                        <small data-i18n="ext_syn_both_sliders">If both sliders are non-zero, then both will trigger synopsis updates at their respective intervals.</small>
+                        <hr>
                     </div>
-
-                    <label data-i18n="ext_synopsis_position">Injection Position</label>
+                    <div class="synopsis_template">
+                        <label for="synopsis_template" data-i18n="ext_syn_injection_template">Injection Template</label>
+                        <textarea id="synopsis_template" class="text_pole textarea_compact" rows="2" data-i18n="[placeholder]ext_syn_synopsis_template_placeholder" placeholder="&lcub;&lcub;synopsis&rcub;&rcub; will resolve to the current synopsis contents."></textarea>
+                    </div>
+                    <label for="synopsis_position" data-i18n="ext_syn_injection_position">Injection Position</label>
+                    <label class="checkbox_label" for="synopsis_include_wi_scan" data-i18n="[title]ext_syn_include_wi_scan_desc" title="Include the latest synopsis in the WI scan.">
+                        <input id="synopsis_include_wi_scan" type="checkbox" />
+                        <span data-i18n="ext_syn_include_wi_scan">Include in World Info Scanning</span>
+                    </label>
                     <div class="radio_group">
-                        <label title="Do not inject synopsis into prompt">
+                        <label>
                             <input type="radio" name="synopsis_position" value="-1" />
-                            <span data-i18n="None">None (not injected)</span>
+                            <span data-i18n="None (not injected)">None (not injected)</span>
+                            <i class="fa-solid fa-info-circle" title="The synopsis will not be injected into the prompt. You can still access it via the &lcub;&lcub;synopsis&rcub;&rcub; macro." data-i18n="[title]ext_syn_injection_position_none"></i>
                         </label>
-
-                        <label title="Inject before main prompt">
+                        <label>
                             <input type="radio" name="synopsis_position" value="2" />
-                            <span data-i18n="Before Main Prompt">Before Main Prompt</span>
+                            <span data-i18n="Before Main Prompt / Story String">Before Main Prompt / Story String</span>
                         </label>
-
-                        <label title="Inject after main prompt">
+                        <label>
                             <input type="radio" name="synopsis_position" value="0" />
-                            <span data-i18n="After Main Prompt">After Main Prompt</span>
+                            <span data-i18n="After Main Prompt / Story String">After Main Prompt / Story String</span>
                         </label>
-
-                        <label class="flex-container alignItemsCenter" title="Inject inside chat at specific depth and role">
+                        <label class="flex-container alignItemsCenter" title="How many messages before the current end of the chat." data-i18n="[title]How many messages before the current end of the chat.">
                             <input type="radio" name="synopsis_position" value="1" />
-                            <span data-i18n="In-chat @ Depth">In-chat @ Depth</span>
-                            <input id="synopsis_depth" class="text_pole widthUnset" type="number" min="0" max="9999" aria-label="Injection depth" />
+                            <span data-i18n="In-chat @ Depth">In-chat @ Depth</span> <input id="synopsis_depth" class="text_pole widthUnset" type="number" min="0" max="9999" />
                             <span data-i18n="as">as</span>
-                            <select id="synopsis_role" class="text_pole widthNatural" aria-label="Injection role">
+                            <select id="synopsis_role" class="text_pole widthNatural">
                                 <option value="0" data-i18n="System">System</option>
                                 <option value="1" data-i18n="User">User</option>
                                 <option value="2" data-i18n="Assistant">Assistant</option>
